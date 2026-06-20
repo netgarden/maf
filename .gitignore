@@ -1,0 +1,17 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build cache
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,42 @@
+struct LoginRequest {
+    username string
+    password string
+}
+
+struct LoginResponse {
+    accessToken string
+}
+
+struct RefreshResponse {
+    accessToken string
+}
+
+struct MeResponse {
+    id        string
+    username  string
+    email     string
+    firstName string
+    lastName  string
+    admin     bool
+}
+
+error Unauthorized {
+    code = 1
+    http_code = 401
+    message = "unauthorized"
+}
+
+error BadCredentials {
+    code = 2
+    http_code = 401
+    message = "invalid credentials"
+}
+
+@Path("api/auth")
+service Auth {
+    login(request LoginRequest) (LoginResponse)
+    logout()
+    refresh() (RefreshResponse)
+    @method("GET")
+    me() (MeResponse)
+}

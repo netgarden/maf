@@ -1,0 +1,15 @@
+struct ChangePasswordRequest {
+    currentPassword string
+    newPassword      string
+}
+
+error WrongPassword {
+    code = 3
+    http_code = 400
+    message = "wrong current password"
+}
+
+@Path("api/profile")
+service Profile {
+    changePassword(request ChangePasswordRequest)
+}

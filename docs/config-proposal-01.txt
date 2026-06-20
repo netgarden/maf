@@ -1,0 +1,135 @@
+  Proposal: Config Value Registry
+
+  Problem
+
+  Currently, when auth needs secret from the security module it does:
+
+  // auth/module.go:114 — hard package-level import of security
+  securityModule := m.manager.GetModule("security").(*security.Module)
+  m.securityConfig = securityModule.GetConfig()
+
+  This creates a compile-time dependency auth → security (full package). Every cross-module config access is a direct import and type-cast, coupling modules that should otherwise be independent.
+
+  ---
+  Proposed Solution: ModuleConfigProvider + Registry
+
+  Add one new optional interface and a typed generic getter. No DI framework, no code generation — fits the existing runtime-interface-assertion pattern already used throughout the framework.
+
+  1. New interface in maf/module.go
+
+  // ModuleConfigProvider allows a module to publish named config values
+  // so other modules can consume them without importing the provider's package.
+  type ModuleConfigProvider interface {
+      Module
+      GetConfigValues() map[string]any
+  }
+
+  2. Manager additions in maf/manager.go
+
+  type Manager struct {
+      // existing fields ...
+      configValues map[string]any  // add this
+  }
+
+  // SetConfigFile exposes the existing (currently unreachable) YAML loading path.
+  func (m *Manager) SetConfigFile(path string) *Manager {
+      m.configFile = path
+      return m
+  }
+
+  func (m *Manager) buildConfigRegistry() {
+      m.configValues = make(map[string]any)
+      for el := m.modules.Front(); el != nil; el = el.Next() {
+          provider, ok := el.Value.(ModuleConfigProvider)
+          if !ok {
+              continue
+          }
+          for k, v := range provider.GetConfigValues() {
+              m.configValues[k] = v
+          }
+      }
+  }
+
+  // GetConfigValue is a package-level generic function (Go doesn't allow
+  // generic methods, so this pattern mirrors how the standard library does it).
+  func GetConfigValue[T any](m *Manager, key string) (T, bool) {
+      v, ok := m.configValues[key]
+      if !ok {
+          var zero T
+          return zero, false
+      }
+      typed, ok := v.(T)
+      return typed, ok
+  }
+
+  Wire it into start() right after initConfiguration():
+
+  func (m *Manager) start() error {
+      // ...
+      err = m.initConfiguration()
+      if err != nil { return err }
+
+      m.buildConfigRegistry()  // ← add here, configs are all set at this point
+
+      err = m.initLogging()
+      // ...
+  }
+
+  3. Provider side — security/module.go
+
+  func (m *Module) GetConfigValues() map[string]any {
+      return map[string]any{
+          "security.secret":     m.config.Secret,
+          "security.bcryptCost": m.config.BcryptCost,
+      }
+  }
+
+  Key naming convention: {moduleID}.{camelCaseField} — mirrors the existing env var convention (APP_SECURITY_SECRET → security.secret).
+
+  4. Consumer side — auth/module.go
+
+  func (m *Module) Initialize() error {
+      secret, ok := maf.GetConfigValue[string](m.manager, "security.secret")
+      if !ok {
+          return errors.New("required config value 'security.secret' not provided by security module")
+      }
+      m.jwtSecret = secret
+      // security package import can now be removed from auth entirely
+  }
+
+  ---
+  What this fixes
+
+  ┌───────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────┐
+  │                                Before                                 │                           After                           │
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+  │ auth imports security package just to read a config value             │ auth imports only maf                                     │
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Type-cast to concrete *security.Module — breaks if module is swapped  │ Interface-driven — any module can publish security.secret │
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+  │ No way to know what cross-module config values are available          │ GetConfigValues() is a documented contract on each module │
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+  │ SetConfigFile() missing despite YAML loader existing (manager.go:320) │ Exposed via fluent setter                                 │
+  └───────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────┘
+
+  ---
+  What this does NOT change
+
+  - The per-module config structs stay exactly as-is (ModuleSetConfig, CreateConfig(), SetConfig())
+  - The existing env var loading and YAML loading are untouched
+  - Modules that need deep integration (e.g., auth calling security's GetPasswordsManager()) still use the direct GetModule() type-assertion — the registry is only for config values, not services
+
+  ---
+  Scope of changes
+
+  ┌────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │        File        │                                                 Change                                                  │
+  ├────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ maf/module.go      │ Add ModuleConfigProvider interface (~5 lines)                                                           │
+  ├────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ maf/manager.go     │ Add field, buildConfigRegistry(), GetConfigValue[T](), SetConfigFile(), one call in start() (~25 lines) │
+  ├────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ security/module.go │ Implement GetConfigValues()                                                                             │
+  ├────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ auth/module.go     │ Replace direct security config access with GetConfigValue calls                                         │
+  └────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
