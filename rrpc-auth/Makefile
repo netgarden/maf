@@ -1,4 +1,4 @@
-RRPC_GEN_DIR := ../../netgarden/rrpc/rrpc-gen
+RRPC_GEN_DIR := ../../rrpc/gen
 
 .PHONY: generate
 

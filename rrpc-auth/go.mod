@@ -2,7 +2,7 @@ module github.com/netgarden/maf/rrpc-auth
 
 go 1.26.1
 
-replace github.com/netgarden/rrpc => ../../netgarden/rrpc/rrpc
+replace github.com/netgarden/rrpc => ../../rrpc
 
 require (
 	github.com/netgarden/maf v0.0.0-20250327102624-f25d54ddf786

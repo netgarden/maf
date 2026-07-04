@@ -2,7 +2,7 @@ module github.com/netgarden/maf/rrpc-server
 
 go 1.26.1
 
-replace github.com/netgarden/rrpc => ../../netgarden/rrpc/rrpc
+replace github.com/netgarden/rrpc => ../../rrpc
 
 require (
 	github.com/netgarden/maf v0.0.0-20260417193235-7c38ceefb8c3
