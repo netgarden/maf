@@ -3,19 +3,32 @@ package services
 import (
 	"errors"
 
-	"gorm.io/gorm"
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
+	"github.com/netgarden/maf/locks"
+	"github.com/netgarden/maf/security/passwords"
+	"gorm.io/gorm"
 )
 
-func NewUsersService(db *gorm.DB) *UsersService {
+// adminBootstrapLockNamespace serializes EnsureAdminExists across replicas
+// starting concurrently against the same database. Distinct from
+// locks.SystemLockNamespace (0) and jobs.JobsLockNamespace (1) so this
+// doesn't serialize against unrelated lock users sharing the same locks
+// table.
+const adminBootstrapLockNamespace locks.LockNamespace = 2
+
+func NewUsersService(db *gorm.DB, passwordsManager *passwords.Manager, locksService *locks.Service) *UsersService {
 	return &UsersService{
-		db: db,
+		db:               db,
+		passwordsManager: passwordsManager,
+		locksService:     locksService,
 	}
 }
 
 type UsersService struct {
-	db *gorm.DB
+	db               *gorm.DB
+	passwordsManager *passwords.Manager
+	locksService     *locks.Service
 }
 
 func (s *UsersService) GetUser(id string) (*entities.User, error) {
@@ -26,23 +39,65 @@ func (s *UsersService) GetUserByUsername(username string) (*entities.User, error
 	return s.getUser(s.db, "username", username)
 }
 
+// CreateUser creates a new user with a hashed password. Returns (nil, nil)
+// when the username is already taken.
 func (s *UsersService) CreateUser(data *dto.UserCreateDTO) (*entities.User, error) {
+
+	existing, err := s.GetUserByUsername(data.Username)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, nil
+	}
 
 	user := &entities.User{}
 	user.Username = data.Username
-	user.Password = data.Password
+	user.Password = s.passwordsManager.Encode(data.Password)
 	user.Email = data.Email
 	user.FirstName = data.FirstName
 	user.LastName = data.LastName
 	user.Admin = data.Admin
 	user.Active = true
 
-	err := s.db.Save(user).Error
-	if err != nil {
+	if err := s.db.Save(user).Error; err != nil {
 		return nil, err
 	}
 
 	return user, nil
+}
+
+// EnsureAdminExists creates a default admin user (username "admin") with
+// the given password if no user with the admin flag set exists yet — it's
+// a no-op if any admin user already exists, whatever their username.
+// Meant to be called once at application startup so a fresh installation
+// has a working admin account out of the box.
+//
+// Safe to call concurrently from multiple replicas starting at the same
+// time against the same database: the check-then-create runs inside
+// locksService.RunExclusive, which serializes every caller across every
+// replica via a Postgres advisory lock held for the transaction's
+// duration — so only one replica ever gets past the "does an admin exist"
+// check before actually creating one.
+func (s *UsersService) EnsureAdminExists(defaultPassword string) error {
+	return s.locksService.RunExclusive(adminBootstrapLockNamespace, func(tx *gorm.DB) error {
+
+		var count int64
+		if err := tx.Model(&entities.User{}).Where("admin = ?", true).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+
+		user := &entities.User{
+			Username: "admin",
+			Password: s.passwordsManager.Encode(defaultPassword),
+			Admin:    true,
+			Active:   true,
+		}
+		return tx.Create(user).Error
+	})
 }
 
 func (s *UsersService) UpdatePassword(id, passwordHash string) error {

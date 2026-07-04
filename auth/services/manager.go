@@ -1,9 +1,10 @@
 package services
 
 import (
-	"gorm.io/gorm"
 	"github.com/netgarden/maf"
+	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
+	"gorm.io/gorm"
 )
 
 func NewManager(
@@ -11,12 +12,14 @@ func NewManager(
 	db *gorm.DB,
 	secret string,
 	passwordsManager *passwords.Manager,
+	locksService *locks.Service,
 ) *Manager {
 	return &Manager{
 		config:           config,
 		db:               db,
 		secret:           secret,
 		passwordsManager: passwordsManager,
+		locksService:     locksService,
 	}
 }
 
@@ -25,6 +28,7 @@ type Manager struct {
 	db               *gorm.DB
 	secret           string
 	passwordsManager *passwords.Manager
+	locksService     *locks.Service
 
 	usersService    *UsersService
 	sessionsService *SessionsService
@@ -33,7 +37,7 @@ type Manager struct {
 
 func (m *Manager) Init() error {
 
-	m.usersService = NewUsersService(m.db)
+	m.usersService = NewUsersService(m.db, m.passwordsManager, m.locksService)
 	m.sessionsService = NewSessionsService(m.db)
 	m.authService = NewAuthService(
 		m.config,
