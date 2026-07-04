@@ -1,0 +1,110 @@
+struct EmailItem {
+    id string
+    to []string
+    cc []string
+    bcc []string
+    subject string
+    status string
+    attempts int
+    lastError string
+    createdAt string
+    nextAttemptAt string
+    sentAt string
+    cancelledAt string
+    gaveUpAt string
+}
+
+struct ListEmailsRequest {
+    status string
+    search string
+    page int
+    pageSize int
+}
+
+struct ListEmailsResponse {
+    items []EmailItem
+    total int
+    page int
+    pageSize int
+}
+
+error EmailNotFound {
+    code = 1
+    http_code = 404
+    message = "email not found"
+}
+
+error EmailNotRetryable {
+    code = 2
+    http_code = 409
+    message = "email is not in a retryable state"
+}
+
+error EmailNotCancellable {
+    code = 3
+    http_code = 409
+    message = "email is not in a cancellable state"
+}
+
+struct TemplateItem {
+    id string
+    subject string
+    bodyText string
+    bodyHtml string
+    isCustomized bool
+    description string
+}
+
+struct ListTemplatesResponse {
+    items []TemplateItem
+}
+
+struct UpdateTemplateRequest {
+    subject string
+    bodyText string
+    bodyHtml string
+}
+
+error TemplateNotFound {
+    code = 4
+    http_code = 404
+    message = "template not found"
+}
+
+error TemplateInvalid {
+    code = 5
+    http_code = 400
+    message = "template failed to parse"
+}
+
+@Path("api/admin/mailer")
+service Mailer {
+    @method("GET")
+    @Path("")
+    list(request ListEmailsRequest) (ListEmailsResponse)
+
+    @method("GET")
+    @Path("{id:string}")
+    get() (EmailItem)
+
+    @Path("{id:string}/retry")
+    retry() (EmailItem)
+
+    @Path("{id:string}/cancel")
+    cancel() (EmailItem)
+
+    @method("GET")
+    @Path("templates")
+    listTemplates() (ListTemplatesResponse)
+
+    @method("GET")
+    @Path("templates/{id:string}")
+    getTemplate() (TemplateItem)
+
+    @Path("templates/{id:string}")
+    updateTemplate(request UpdateTemplateRequest) (TemplateItem)
+
+    @method("DELETE")
+    @Path("templates/{id:string}")
+    resetTemplate()
+}

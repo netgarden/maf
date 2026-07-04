@@ -1,0 +1,6 @@
+name = "mailer"
+version = "0.0.1"
+
+option go_package = "rpc"
+
+include "mailer.rrpc"
