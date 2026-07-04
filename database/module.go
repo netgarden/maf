@@ -4,21 +4,26 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/netgarden/maf"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"github.com/netgarden/maf"
 )
 
-func NewModule() *Module {
-	return &Module{}
+func NewModule(configDefaults ...map[string]any) *Module {
+	m := &Module{}
+	if len(configDefaults) > 0 {
+		m.configDefaults = configDefaults[0]
+	}
+	return m
 }
 
 type Module struct {
-	manager   *maf.Manager
-	appConfig *maf.Config
-	config    *Config
-	db        *gorm.DB
+	manager        *maf.Manager
+	appConfig      *maf.Config
+	config         *Config
+	db             *gorm.DB
+	configDefaults map[string]any
 }
 
 func (m *Module) GetID() string {
@@ -34,7 +39,7 @@ func (m *Module) SetManager(manager *maf.Manager) {
 }
 
 func (m *Module) GetConfigSchema() []maf.ConfigItem {
-	return []maf.ConfigItem{
+	items := []maf.ConfigItem{
 		{Name: "database.dsn", Type: maf.String, DefaultValue: "host=localhost user=app password=app dbname=app port=5432 sslmode=disable"},
 		{Name: "database.maxIdleConns", Type: maf.Int, DefaultValue: 5},
 		{Name: "database.maxOpenConns", Type: maf.Int, DefaultValue: 10},
@@ -42,6 +47,12 @@ func (m *Module) GetConfigSchema() []maf.ConfigItem {
 		{Name: "database.autoMigrate", Type: maf.Bool},
 		{Name: "database.showSql", Type: maf.Bool},
 	}
+	for i, item := range items {
+		if v, ok := m.configDefaults[item.Name]; ok {
+			items[i].DefaultValue = v
+		}
+	}
+	return items
 }
 
 func (m *Module) SetConfig(config *maf.Config) {
