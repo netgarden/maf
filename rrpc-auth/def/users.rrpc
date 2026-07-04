@@ -21,10 +21,25 @@ struct UpdateUserRequest {
     active    bool
 }
 
+struct CreateUserRequest {
+    username  string
+    password  string
+    email     string
+    firstName string
+    lastName  string
+    admin     bool
+}
+
 error UserNotFound {
     code = 4
     http_code = 404
     message = "user not found"
+}
+
+error UserAlreadyExists {
+    code = 5
+    http_code = 409
+    message = "username already taken"
 }
 
 @Path("api/admin/users")
@@ -32,6 +47,8 @@ service Users {
     @method("GET")
     @Path("")
     list() (ListUsersResponse)
+    @Path("")
+    create(request CreateUserRequest) (UserItem)
     @Path("{id:string}")
     update(request UpdateUserRequest)
     @method("DELETE")

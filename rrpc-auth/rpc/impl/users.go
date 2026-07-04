@@ -1,10 +1,10 @@
 package impl
 
 import (
-	"github.com/netgarden/rrpc"
 	mafauthdto "github.com/netgarden/maf/auth/dto"
 	mafauth "github.com/netgarden/maf/auth/services"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
+	"github.com/netgarden/rrpc"
 )
 
 func NewUsersService(svc *mafauth.UsersService) rpc.UsersService {
@@ -35,6 +35,32 @@ func (s *UsersServiceImpl) List(ctx *rrpc.Context) (*rpc.ListUsersResponse, erro
 	}
 
 	return &rpc.ListUsersResponse{Users: items}, nil
+}
+
+func (s *UsersServiceImpl) Create(ctx *rrpc.Context, req *rpc.CreateUserRequest) (*rpc.UserItem, error) {
+	created, err := s.users.CreateUser(&mafauthdto.UserCreateDTO{
+		Username:  req.Username,
+		Password:  req.Password,
+		Email:     req.Email,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Admin:     req.Admin,
+	})
+	if err != nil {
+		return nil, rrpc.ErrRrpcInternalError.WithCause(err)
+	}
+	if created == nil {
+		return nil, rpc.ErrUserAlreadyExists
+	}
+	return &rpc.UserItem{
+		Id:        created.ID.String(),
+		Username:  created.Username,
+		Email:     created.Email,
+		FirstName: created.FirstName,
+		LastName:  created.LastName,
+		Admin:     created.Admin,
+		Active:    created.Active,
+	}, nil
 }
 
 func (s *UsersServiceImpl) Update(ctx *rrpc.Context, req *rpc.UpdateUserRequest) error {
