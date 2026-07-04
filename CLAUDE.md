@@ -17,6 +17,8 @@ datatables/ # DataTables server-side processing helper                 (github.c
 mergefs/    # Merges multiple fs.FS instances                          (github.com/netgarden/maf/mergefs)
 rrpc-server/# rrpc server module                                       (github.com/netgarden/maf/rrpc-server)
 rrpc-auth/  # rrpc auth integration                                    (github.com/netgarden/maf/rrpc-auth)
+locks/      # Postgres advisory-lock-backed distributed lease locks    (github.com/netgarden/maf/locks)
+jobs/       # Recurring background jobs, coordinated via locks/        (github.com/netgarden/maf/jobs)
 config/     # WIP — not yet integrated into the framework              (github.com/netgarden/maf/config)
 scripts/    # replace-add.sh / replace-remove.sh — manage replace directives
 ```
@@ -44,7 +46,10 @@ go run main.go
 
 Note: `rrpc-server` and `rrpc-auth` also require a manual replace for `github.com/netgarden/rrpc` pointing to your local clone of that repo.
 
-No tests exist yet in the repository.
+Most modules have no tests yet. Exceptions:
+- `auth/services`: plain unit tests against small repository interfaces (mocked), no DB needed.
+- `locks`: integration tests against a real Postgres (advisory locks can't be meaningfully mocked) — skipped unless `MAF_LOCKS_TEST_DSN` is set. See `locks/README.md`.
+- `jobs`: scheduler logic is tested in-memory against a mock (`manager_test.go`); DB-backed behavior needs `MAF_JOBS_TEST_DSN` (see `jobs/README.md`). Depends on `github.com/netgarden/orderedlist` (sibling repo, not part of this one) and `locks`.
 
 ## Core architecture
 
@@ -108,6 +113,16 @@ func (m *Module) Initialize() error {
 
 This creates a compile-time import dependency between modules. The proposed improvement is a `ModuleConfigProvider` interface + typed registry — see the prior design discussion for details.
 
+**Always declare this dependency** by also implementing `ModuleDependenciesProvider`:
+
+```go
+func (m *Module) GetDependencies() []string {
+    return []string{"security"}
+}
+```
+
+Without this, the code above is a landmine: if `security` isn't registered, `GetModule` returns `nil` and the bare type assertion panics. With it, the Manager checks every declared dependency is registered — and topologically sorts modules so dependencies always initialize before dependents — before any lifecycle phase runs, failing fast with `module %q depends on module %q, which is not registered` or `circular module dependency detected: a -> b -> a` instead. See `manager.go`'s `checkDependencies`/`resolveStartOrder` and `dependency_order_test.go`.
+
 ### Integration patterns (no direct imports needed)
 
 **Database integration** — implement interfaces from `database/interfaces.go`:
@@ -147,11 +162,11 @@ func main() {
 }
 ```
 
-Module order in `GetModules()` determines initialization order — dependencies must appear before dependents.
+Registration order in `GetModules()` is only the *fallback* initialization order now: the Manager topologically sorts modules by their declared `GetDependencies()` before running any lifecycle phase, so a dependency is always initialized (and started, and stopped — shutdown runs in the reverse order) before its dependents regardless of registration order. Modules that don't declare `ModuleDependenciesProvider` at all keep their relative registration order. A module that reaches into another via `manager.GetModule(id)` without declaring that dependency is still only correctly ordered by luck of registration order — declare it.
 
 ## Known gaps
 
 - `Manager.configFile` has no public setter — YAML config loading is wired but unreachable
 - `logging/module.go` has `setupLogging()` (lowercase) but the interface requires `SetupLogging()` — the logging module does not currently satisfy `ModuleLoggingProvider`
-- `config/` package is incomplete (WIP, not integrated)
-- No tests exist anywhere in the repository
+- `config/` package referenced by `web/go.mod` and `datatables/go.mod`'s replace directives doesn't exist in this checkout at all (not just incomplete) — `web` and `datatables` currently fail to build standalone (`replacement directory ../config does not exist`). Nothing else in this repo depends on `web`/`datatables`, so this is only a blocker if you use those two modules.
+- Most modules have no tests — see the exceptions listed above under "Build and development commands"

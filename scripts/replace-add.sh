@@ -54,6 +54,17 @@ add github.com/netgarden/maf/auth      ../auth
 add github.com/netgarden/maf/database   ../database
 add github.com/netgarden/maf/security   ../security
 
+dir=locks
+echo "$dir"
+add github.com/netgarden/maf ..
+
+dir=jobs
+echo "$dir"
+add github.com/netgarden/maf          ..
+add github.com/netgarden/maf/database  ../database
+add github.com/netgarden/maf/locks     ../locks
+
 echo ""
 echo "Done. Local replace directives added."
 echo "Note: rrpc-server and rrpc-auth still need a manual replace for github.com/netgarden/rrpc."
+echo "Note: jobs still needs a manual replace for github.com/netgarden/orderedlist (sibling repo)."

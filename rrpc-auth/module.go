@@ -3,11 +3,11 @@ package rrpcauth
 import (
 	"errors"
 
-	"github.com/netgarden/rrpc"
-	mafauth "github.com/netgarden/maf/auth"
 	"github.com/netgarden/maf"
+	mafauth "github.com/netgarden/maf/auth"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
 	"github.com/netgarden/maf/rrpc-auth/rpc/impl"
+	"github.com/netgarden/rrpc"
 )
 
 func NewModule() *Module {
@@ -25,6 +25,10 @@ func (m *Module) GetName() string { return "RRPC Auth" }
 
 func (m *Module) SetManager(manager *maf.Manager) {
 	m.manager = manager
+}
+
+func (m *Module) GetDependencies() []string {
+	return []string{"auth"}
 }
 
 func (m *Module) Initialize() error {
