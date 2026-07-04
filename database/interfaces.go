@@ -1,8 +1,8 @@
 package database
 
 import (
-	"gorm.io/gorm"
 	"github.com/netgarden/maf"
+	"gorm.io/gorm"
 )
 
 type Consumer interface {

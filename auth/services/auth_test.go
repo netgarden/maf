@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/database"
-	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/security/passwords"
+	uuid "github.com/satori/go.uuid"
 )
 
 // compile-time interface checks

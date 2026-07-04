@@ -1,10 +1,10 @@
 package impl
 
 import (
-	"github.com/netgarden/rrpc"
 	mafauth "github.com/netgarden/maf/auth"
 	"github.com/netgarden/maf/rrpc-auth/authctx"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
+	"github.com/netgarden/rrpc"
 )
 
 type profileService interface {

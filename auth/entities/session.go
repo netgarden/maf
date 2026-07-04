@@ -1,8 +1,8 @@
 package entities
 
 import (
-	uuid "github.com/satori/go.uuid"
 	"github.com/netgarden/maf/database"
+	uuid "github.com/satori/go.uuid"
 )
 
 type Session struct {

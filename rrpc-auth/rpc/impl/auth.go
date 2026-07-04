@@ -3,12 +3,12 @@ package impl
 import (
 	"net/http"
 
-	"github.com/netgarden/rrpc"
 	mafauth "github.com/netgarden/maf/auth"
 	authdto "github.com/netgarden/maf/auth/dto"
 	authentities "github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/rrpc-auth/authctx"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
+	"github.com/netgarden/rrpc"
 )
 
 type authService interface {

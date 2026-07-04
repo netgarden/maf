@@ -4,10 +4,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/netgarden/rrpc"
 	"github.com/netgarden/maf/auth/services"
 	"github.com/netgarden/maf/rrpc-auth/authctx"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
+	"github.com/netgarden/rrpc"
 )
 
 // NewAuthenticationMiddleware validates the Bearer token when present and stores

@@ -3,10 +3,10 @@ package services
 import (
 	"errors"
 
-	uuid "github.com/satori/go.uuid"
-	"gorm.io/gorm"
 	"github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/database"
+	uuid "github.com/satori/go.uuid"
+	"gorm.io/gorm"
 )
 
 func NewSessionsService(db *gorm.DB) *SessionsService {

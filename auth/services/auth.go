@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
-	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/security/passwords"
 )
 

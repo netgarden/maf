@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/netgarden/rrpc"
 	authdto "github.com/netgarden/maf/auth/dto"
 	authentities "github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/rrpc-auth/authctx"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
+	"github.com/netgarden/rrpc"
 )
 
 // mockAuth implements authService for testing.

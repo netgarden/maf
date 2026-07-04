@@ -2,10 +2,10 @@ package web
 
 import (
 	"github.com/flosch/pongo2/v6"
-	"io/fs"
-	"github.com/netgarden/maf/config"
 	"github.com/netgarden/maf"
+	"github.com/netgarden/maf/config"
 	"github.com/netgarden/maf/mergefs"
+	"io/fs"
 )
 
 func NewModule(moduleConfig *ModuleConfig) *Module {

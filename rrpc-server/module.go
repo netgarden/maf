@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/netgarden/rrpc"
 	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/security/passwords"
+	"github.com/netgarden/rrpc"
 )
 
 func NewModule() *Module {

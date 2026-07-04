@@ -2,8 +2,8 @@ package web
 
 import (
 	"github.com/flosch/pongo2/v6"
-	"io/fs"
 	"github.com/netgarden/maf"
+	"io/fs"
 )
 
 type Controller interface {

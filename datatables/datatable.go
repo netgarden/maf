@@ -1,8 +1,8 @@
 package datatable
 
 import (
-	"gorm.io/gorm"
 	"github.com/netgarden/maf/web"
+	"gorm.io/gorm"
 	"strconv"
 )
 
