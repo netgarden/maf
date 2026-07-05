@@ -7,15 +7,21 @@ application sharing one database: no email is ever sent twice, even if an
 admin-triggered "retry now" call lands on a different replica than the one
 currently processing the queue.
 
+`Email.BodyText`/`BodyHTML` are encrypted at rest (AES-256-GCM, via
+`maf/security/encryption`) — see "Encryption at rest" below.
+
 ## Usage
 
-As a maf module (register `locks.NewModule()` and `jobs.NewModule()`
-before it — `mailer` depends on `jobs` for its recurring queue-processing
-tick, which itself depends on `locks`):
+As a maf module (register `locks.NewModule()`, `jobs.NewModule()`, and
+`security.NewModule()` before it — `mailer` depends on `jobs` for its
+recurring queue-processing tick, which itself depends on `locks`, and on
+`security` for the encryption key used to encrypt queued email bodies at
+rest):
 
 ```go
 modules = append(modules, locks.NewModule())
 modules = append(modules, jobs.NewModule())
+modules = append(modules, security.NewModule())
 modules = append(modules, mailer.NewModule())
 
 // after Initialize():
@@ -139,6 +145,45 @@ applied per email row instead of per job.
 `smtp.encryption` is validated at startup (`Initialize()`), not at first
 send — an unknown value fails the application to start rather than failing
 silently later.
+
+Also required: `security.encryption.key` (`maf/security`'s own config,
+not `mailer`'s) — see "Encryption at rest" below.
+
+## Encryption at rest
+
+`Email.BodyText`/`BodyHTML` are encrypted (AES-256-GCM) before being
+written to `mailer_emails`, using `maf/security`'s `GetEncryptionManager()`
+— configured via `security.encryption.key`, **deliberately separate** from
+`security.secret` (used elsewhere for JWT signing). This is entirely an
+internal storage-layer detail: every public `Service` method (`Enqueue`,
+`GetEmail`, `ListEmails`, the batch claim feeding the actual SMTP send) is
+still plaintext in, plaintext out — nothing about the public API changes.
+
+Not encrypted, deliberately: `Subject` (the admin API's `ListEmailsFilter.Search`
+does `subject ILIKE`, which wouldn't work against ciphertext), `To`/`Cc`/`Bcc`
+(useful to see at a glance in the admin UI, and less sensitive than full
+body content), and `Template.BodyText`/`BodyHTML` (templates are closer to
+code/config than data — the actual sensitive content only exists once
+rendered into a specific queued `Email`).
+
+A row encrypted under one `security.encryption.key` cannot be decrypted
+after that key changes without a data migration — `GetEmail`/`ListEmails`/
+the queue tick will return a decrypt error for it, not silently corrupt or
+crash (see `TestGetEmail_WrongKeyFailsToDecrypt`).
+
+`maf/security/encryption.Manager` works in raw `[]byte` and prefixes its
+output with an 8-byte numeric algorithm identifier, dispatching `Decrypt`
+by that prefix — so if `Manager`'s default `Cryptor` is ever swapped for
+something more secure in the future, old rows encrypted under the
+previous algorithm keep decrypting correctly as long as that old `Cryptor`
+stays registered (see `Manager.AddCryptor`/`AddDefaultCryptor` and
+`TestManager_DecryptsUnderPreviousDefaultAfterCryptorChange` in that
+package) — nothing in `mailer` itself needs to change for that.
+Since `Email.BodyText`/`BodyHTML` are `string` (`TEXT` columns, not
+`BYTEA`), `encryptBody`/`decryptBody` in `service.go` base64-encode the
+encrypted bytes before storing them and decode before calling `Decrypt` —
+that text-encoding step is `mailer`'s own concern, not
+`encryption.Manager`'s.
 
 ## A known gap in the underlying `.rrpc` DSL
 

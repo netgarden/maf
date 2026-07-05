@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"sync"
@@ -11,7 +12,17 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/netgarden/maf/security/encryption"
 )
+
+// testEncryption is shared by every test in this file — encryption is an
+// internal storage-layer detail, so unless a test specifically exercises
+// it (see TestEnqueue_EncryptsBodyAtRest / TestGetEmail_WrongKeyFailsToDecrypt),
+// this being a fixed, known manager is not itself load-bearing.
+func testEncryption() *encryption.Manager {
+	return encryption.NewManager("test-encryption-secret")
+}
 
 // testDB connects to a real Postgres database and migrates mailer's
 // tables. See README.md for what MAF_MAILER_TEST_DSN should point at.
@@ -77,7 +88,7 @@ func testRetryConfigFast() RetryConfig {
 
 func newTestServiceWithSender(t *testing.T, db *gorm.DB, sender Sender) *Service {
 	t.Helper()
-	return NewService(db, sender, testRetryConfigFast(), 20, time.Minute)
+	return NewService(db, sender, testRetryConfigFast(), 20, time.Minute, testEncryption())
 }
 
 func TestEnqueue_PersistsCorrectly(t *testing.T) {
@@ -118,6 +129,79 @@ func TestEnqueue_PersistsCorrectly(t *testing.T) {
 	}
 }
 
+// TestEnqueue_EncryptsBodyAtRest is the actual proof that body encryption
+// isn't a no-op: it reads the raw DB row directly, bypassing
+// Service.GetEmail's decryption entirely, and checks the stored value.
+func TestEnqueue_EncryptsBodyAtRest(t *testing.T) {
+	db := testDB(t)
+	enc := testEncryption()
+	svc := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, enc)
+
+	plainText := "your temporary password is: correct-horse-battery-staple"
+	html := "<p>your temporary password is: correct-horse-battery-staple</p>"
+	email, err := svc.Enqueue(&EnqueueRequest{
+		To:       []string{"a@example.com"},
+		Subject:  "Hello",
+		BodyText: plainText,
+		BodyHTML: &html,
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// The value returned directly from Enqueue must already be plaintext —
+	// Service's public API is plaintext in, plaintext out.
+	if email.BodyText != plainText {
+		t.Errorf("expected Enqueue's own return value to be plaintext, got: %q", email.BodyText)
+	}
+
+	var rawBodyText, rawBodyHTML string
+	err = db.Raw("SELECT body_text, body_html FROM mailer_emails WHERE id = ?", email.ID).
+		Row().Scan(&rawBodyText, &rawBodyHTML)
+	if err != nil {
+		t.Fatalf("raw row query: %v", err)
+	}
+
+	if rawBodyText == plainText {
+		t.Fatal("expected the stored body_text column to be ciphertext, not plaintext")
+	}
+	if rawBodyHTML == html {
+		t.Fatal("expected the stored body_html column to be ciphertext, not plaintext")
+	}
+
+	rawBodyTextBytes, err := base64.StdEncoding.DecodeString(rawBodyText)
+	if err != nil {
+		t.Fatalf("base64-decode rawBodyText: %v", err)
+	}
+	decryptedText, err := enc.Decrypt(rawBodyTextBytes)
+	if err != nil {
+		t.Fatalf("Decrypt(rawBodyText): %v", err)
+	}
+	if string(decryptedText) != plainText {
+		t.Errorf("decrypting the raw stored value did not recover the original plaintext: got %q, want %q", decryptedText, plainText)
+	}
+}
+
+// TestGetEmail_WrongKeyFailsToDecrypt is the key-rotation-shaped failure
+// mode: a Service configured with a different encryption secret than the
+// one that wrote a row must surface a decrypt error, not silently corrupt
+// or crash.
+func TestGetEmail_WrongKeyFailsToDecrypt(t *testing.T) {
+	db := testDB(t)
+	writer := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-a"))
+
+	email, err := writer.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "sensitive content"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	reader := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-b"))
+
+	if _, err := reader.GetEmail(email.ID.String()); err == nil {
+		t.Fatal("expected GetEmail to fail to decrypt a row written under a different encryption secret")
+	}
+}
+
 func TestClaimBatch_ConcurrentClaimersGetDisjointSets(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
@@ -138,8 +222,8 @@ func TestClaimBatch_ConcurrentClaimersGetDisjointSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open second connection: %v", err)
 	}
-	svc1 := NewService(db, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute)
-	svc2 := NewService(db2, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute)
+	svc1 := NewService(db, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption())
+	svc2 := NewService(db2, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption())
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/netgarden/maf/security/encryption"
 )
 
 var (
@@ -20,7 +23,7 @@ var (
 	ErrTemplateInvalid = errors.New("mailer: template failed to parse")
 )
 
-func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int, claimTimeout time.Duration) *Service {
+func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int, claimTimeout time.Duration, encryptionManager *encryption.Manager) *Service {
 	return &Service{
 		db:           db,
 		sender:       sender,
@@ -28,9 +31,17 @@ func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int,
 		batchSize:    batchSize,
 		claimTimeout: claimTimeout,
 		templates:    newTemplateRegistry(),
+		encryption:   encryptionManager,
 	}
 }
 
+// Service's public methods are all plaintext in, plaintext out — encrypting
+// Email.BodyText/BodyHTML at rest (see encryptBody/decryptBody) is entirely
+// an internal storage-layer detail. Subject/To/Cc/Bcc and Template's own
+// body fields are deliberately not encrypted: Subject stays searchable via
+// ListEmails' subject ILIKE filter, To/Cc/Bcc stay visible for admin
+// triage, and templates are closer to code/config than data — the actual
+// sensitive content only exists once rendered into a specific queued Email.
 type Service struct {
 	db           *gorm.DB
 	sender       Sender
@@ -38,6 +49,61 @@ type Service struct {
 	batchSize    int
 	claimTimeout time.Duration
 	templates    *templateRegistry
+	encryption   *encryption.Manager
+}
+
+// encryptBody encrypts email's BodyText (always) and BodyHTML (if set) in
+// place, before it's written to the database. encryption.Manager works in
+// raw []byte; BodyText/BodyHTML are string columns (TEXT, not BYTEA), so
+// the encrypted bytes are base64-encoded before being stored.
+func (s *Service) encryptBody(email *Email) error {
+	encryptedText, err := s.encryption.Encrypt([]byte(email.BodyText))
+	if err != nil {
+		return fmt.Errorf("mailer: encrypt body text: %w", err)
+	}
+	email.BodyText = base64.StdEncoding.EncodeToString(encryptedText)
+
+	if email.BodyHTML != nil {
+		encryptedHTML, err := s.encryption.Encrypt([]byte(*email.BodyHTML))
+		if err != nil {
+			return fmt.Errorf("mailer: encrypt body html: %w", err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(encryptedHTML)
+		email.BodyHTML = &encoded
+	}
+
+	return nil
+}
+
+// decryptBody reverses encryptBody, for every email loaded back out of the
+// database — GetEmail, ListEmails, and claimBatch all call this so nothing
+// downstream (including the actual SMTP send in sendAndFinalize) ever sees
+// ciphertext.
+func (s *Service) decryptBody(email *Email) error {
+	rawText, err := base64.StdEncoding.DecodeString(email.BodyText)
+	if err != nil {
+		return fmt.Errorf("mailer: decode body text: %w", err)
+	}
+	decryptedText, err := s.encryption.Decrypt(rawText)
+	if err != nil {
+		return fmt.Errorf("mailer: decrypt body text: %w", err)
+	}
+	email.BodyText = string(decryptedText)
+
+	if email.BodyHTML != nil {
+		rawHTML, err := base64.StdEncoding.DecodeString(*email.BodyHTML)
+		if err != nil {
+			return fmt.Errorf("mailer: decode body html: %w", err)
+		}
+		decryptedHTML, err := s.encryption.Decrypt(rawHTML)
+		if err != nil {
+			return fmt.Errorf("mailer: decrypt body html: %w", err)
+		}
+		decoded := string(decryptedHTML)
+		email.BodyHTML = &decoded
+	}
+
+	return nil
 }
 
 // EnqueueRequest is the content of a not-yet-rendered email to queue.
@@ -69,9 +135,22 @@ func (s *Service) EnqueueTx(tx *gorm.DB, req *EnqueueRequest) (*Email, error) {
 		Status:        EmailStatusQueued,
 		NextAttemptAt: time.Now(),
 	}
-	if err := tx.Create(email).Error; err != nil {
+
+	// Encrypt a copy for storage — email itself, returned to the caller,
+	// must stay plaintext (see Service's doc comment).
+	toStore := *email
+	if err := s.encryptBody(&toStore); err != nil {
 		return nil, err
 	}
+
+	if err := tx.Create(&toStore).Error; err != nil {
+		return nil, err
+	}
+
+	// Create populates ID/CreatedAt/UpdatedAt on toStore; copy those back
+	// onto the plaintext value being returned.
+	email.EntityBase = toStore.EntityBase
+
 	return email, nil
 }
 
@@ -170,8 +249,20 @@ func (s *Service) claimBatch() ([]Email, error) {
 
 		return tx.Where("id IN ?", ids).Find(&claimed).Error
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	return claimed, err
+	// Decrypt before returning: sendAndFinalize passes BodyText/BodyHTML
+	// straight to the SMTP sender, so this is the one decryptBody call site
+	// that matters functionally — get it wrong and mailer emails ciphertext.
+	for i := range claimed {
+		if err := s.decryptBody(&claimed[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	return claimed, nil
 }
 
 func (s *Service) sendAndFinalize(ctx context.Context, email Email) {
@@ -277,6 +368,12 @@ func (s *Service) ListEmails(filter ListEmailsFilter) (*ListEmailsResult, error)
 		return nil, err
 	}
 
+	for i := range items {
+		if err := s.decryptBody(&items[i]); err != nil {
+			return nil, err
+		}
+	}
+
 	return &ListEmailsResult{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
@@ -289,6 +386,9 @@ func (s *Service) GetEmail(id string) (*Email, error) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	if err := s.decryptBody(&email); err != nil {
 		return nil, err
 	}
 	return &email, nil

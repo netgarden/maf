@@ -6,8 +6,10 @@ require (
 	github.com/netgarden/maf v0.0.0-20250327102624-f25d54ddf786
 	github.com/netgarden/maf/database v0.0.0-00010101000000-000000000000
 	github.com/netgarden/maf/jobs v0.0.0-00010101000000-000000000000
+	github.com/netgarden/maf/security v0.0.0-00010101000000-000000000000
 	github.com/netgarden/rrpc v0.0.0-00010101000000-000000000000
 	github.com/satori/go.uuid v1.2.0
+	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.31.0
 )
 
@@ -26,7 +28,6 @@ require (
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gorm.io/driver/postgres v1.5.11 // indirect
 )
 
 replace github.com/netgarden/maf => ..
@@ -36,6 +37,8 @@ replace github.com/netgarden/maf/database => ../database
 replace github.com/netgarden/maf/jobs => ../jobs
 
 replace github.com/netgarden/maf/locks => ../locks
+
+replace github.com/netgarden/maf/security => ../security
 
 replace github.com/netgarden/orderedlist => ../../orderedlist
 

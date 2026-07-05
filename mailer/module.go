@@ -15,6 +15,7 @@ import (
 	"github.com/netgarden/maf"
 	"github.com/netgarden/maf/jobs"
 	"github.com/netgarden/maf/mailer/rpc"
+	"github.com/netgarden/maf/security"
 	"github.com/netgarden/rrpc"
 )
 
@@ -36,14 +37,15 @@ func (m *Module) GetName() string { return "Mailer" }
 
 func (m *Module) SetManager(manager *maf.Manager) { m.manager = manager }
 
-// GetDependencies declares "jobs" only — mailer never talks to
+// GetDependencies declares "jobs" and "security". mailer never talks to
 // github.com/netgarden/maf/locks directly (jobs already brings it in
 // transitively for its own per-tick lease), and "database" isn't declared
 // either, matching the locks/jobs precedent: SetDB/GetDBEntities don't need
 // a formal dependency since the database module delivers SetDB during its
 // own PreInitialize-phase consumer fan-out, before any module's
-// Initialize() runs.
-func (m *Module) GetDependencies() []string { return []string{"jobs"} }
+// Initialize() runs. "security" is required for its encryption manager —
+// see service.go's encryptBody/decryptBody.
+func (m *Module) GetDependencies() []string { return []string{"jobs", "security"} }
 
 func (m *Module) GetConfigSchema() []maf.ConfigItem {
 	return []maf.ConfigItem{
@@ -79,6 +81,11 @@ func (m *Module) Initialize() error {
 		return errors.New("mailer: jobs module not found or wrong type — register jobs before mailer")
 	}
 
+	securityModule, ok := m.manager.GetModule("security").(*security.Module)
+	if !ok {
+		return errors.New("mailer: security module not found or wrong type — register security before mailer")
+	}
+
 	cfg := m.config.Sub("mailer")
 
 	sender, err := NewSMTPSender(SMTPConfig{
@@ -102,7 +109,7 @@ func (m *Module) Initialize() error {
 	}
 
 	claimTimeout := cfg.GetDuration("queue.claimTimeout")
-	m.service = NewService(m.db, sender, retryCfg, cfg.GetInt("queue.batchSize"), claimTimeout)
+	m.service = NewService(m.db, sender, retryCfg, cfg.GetInt("queue.batchSize"), claimTimeout, securityModule.GetEncryptionManager())
 
 	jobsModule.GetService().RegisterHandler("mailer-tick", NewTickHandler(m.service))
 
