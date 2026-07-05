@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"log/slog"
 
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
@@ -29,6 +30,18 @@ type UsersService struct {
 	db               *gorm.DB
 	passwordsManager *passwords.Manager
 	locksService     *locks.Service
+
+	mailer   TemplateMailer
+	loginURL string
+}
+
+// SetMailer wires optional new-user-credentials email delivery. Called by
+// rrpc-auth's Module.Initialize() only when a "mailer" module is also
+// registered by the consuming application; leave unset (the default) to
+// make dto.UserCreateDTO.SendCredentialsEmail a no-op.
+func (s *UsersService) SetMailer(mailer TemplateMailer, loginURL string) {
+	s.mailer = mailer
+	s.loginURL = loginURL
 }
 
 func (s *UsersService) GetUser(id string) (*entities.User, error) {
@@ -62,6 +75,20 @@ func (s *UsersService) CreateUser(data *dto.UserCreateDTO) (*entities.User, erro
 
 	if err := s.db.Save(user).Error; err != nil {
 		return nil, err
+	}
+
+	// Best-effort: a failed notification email doesn't undo a successfully
+	// created user, it's just logged — the admin who created the account
+	// can always retry via the mail queue's own admin UI.
+	if data.SendCredentialsEmail && s.mailer != nil {
+		err := s.mailer.EnqueueTemplate(NewUserCredentialsTemplateID, []string{user.Email}, nil, nil, NewUserCredentialsData{
+			Username:          user.Username,
+			TemporaryPassword: data.Password,
+			LoginURL:          s.loginURL,
+		})
+		if err != nil {
+			slog.Error("auth: failed to enqueue new-user-credentials email", slog.Any("error", err), slog.String("username", user.Username))
+		}
 	}
 
 	return user, nil

@@ -31,16 +31,16 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to migrate tables: %v", err)
 	}
 
-	if err := db.Exec("DELETE FROM jobs").Error; err != nil {
+	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Job{}).Error; err != nil {
 		t.Fatalf("failed to reset jobs table: %v", err)
 	}
-	if err := db.Exec("DELETE FROM locks").Error; err != nil {
+	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&locks.Lock{}).Error; err != nil {
 		t.Fatalf("failed to reset locks table: %v", err)
 	}
 
 	t.Cleanup(func() {
-		db.Exec("DELETE FROM jobs")
-		db.Exec("DELETE FROM locks")
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Job{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&locks.Lock{})
 	})
 
 	return db

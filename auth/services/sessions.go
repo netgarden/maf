@@ -44,6 +44,14 @@ func (s *SessionsService) DeleteSession(id string) error {
 	return s.db.Delete(&entities.Session{}, id).Error
 }
 
+// DeleteSessionsByUserID removes every session belonging to userID —
+// used by ConfirmPasswordReset to force re-login everywhere once a
+// password has been reset, the same way a password change should
+// invalidate any session an attacker may already hold.
+func (s *SessionsService) DeleteSessionsByUserID(userID string) error {
+	return s.db.Where("user_id = ?", userID).Delete(&entities.Session{}).Error
+}
+
 func (s *SessionsService) GetSession(id string) (*entities.Session, error) {
 	return s.getSession(s.db, id)
 }

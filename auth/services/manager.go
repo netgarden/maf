@@ -30,20 +30,23 @@ type Manager struct {
 	passwordsManager *passwords.Manager
 	locksService     *locks.Service
 
-	usersService    *UsersService
-	sessionsService *SessionsService
-	authService     *AuthService
+	usersService       *UsersService
+	sessionsService    *SessionsService
+	resetTokensService *PasswordResetTokensService
+	authService        *AuthService
 }
 
 func (m *Manager) Init() error {
 
 	m.usersService = NewUsersService(m.db, m.passwordsManager, m.locksService)
 	m.sessionsService = NewSessionsService(m.db)
+	m.resetTokensService = NewPasswordResetTokensService(m.db)
 	m.authService = NewAuthService(
 		m.config,
 		m.secret,
 		m.usersService,
 		m.sessionsService,
+		m.resetTokensService,
 		m.passwordsManager,
 	)
 
@@ -60,4 +63,8 @@ func (m *Manager) GetUsersService() *UsersService {
 
 func (m *Manager) GetSessionsService() *SessionsService {
 	return m.sessionsService
+}
+
+func (m *Manager) GetPasswordResetTokensService() *PasswordResetTokensService {
+	return m.resetTokensService
 }

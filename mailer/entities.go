@@ -53,7 +53,7 @@ type Email struct {
 	GaveUpAt    *time.Time
 }
 
-func (Email) TableName() string { return "mailer_emails" }
+func (Email) TableName() string { return "mailer_queue" }
 
 // EffectiveStatus reports what an observer should be told: a row stuck at
 // EmailStatusSending past its ClaimExpiresAt belongs to a replica that

@@ -2,7 +2,7 @@ package mailer
 
 // Hand-written implementation of the generated rpc.MailerService interface
 // (see rpc/mailer.gen.go — never hand-edit that file, regenerate it with
-// `make generate` after changing def/mailer.rrpc). This lives in the
+// `make generate` after changing rpc/def/mailer.rrpc). This lives in the
 // package alongside Service rather than in a separate rpc/impl/ package —
 // unlike e.g. citadel's or maf/auth's split between a "services" package
 // and a "module.go" wiring package, mailer's business logic (Service)

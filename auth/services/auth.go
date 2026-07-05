@@ -3,6 +3,8 @@ package services
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/netgarden/maf"
@@ -16,6 +18,7 @@ func NewAuthService(
 	secret string,
 	usersService usersRepository,
 	sessionsService sessionsRepository,
+	resetTokens passwordResetTokensRepository,
 	passwordsManager *passwords.Manager,
 ) *AuthService {
 	return &AuthService{
@@ -23,6 +26,7 @@ func NewAuthService(
 		secret:           secret,
 		usersService:     usersService,
 		sessionsService:  sessionsService,
+		resetTokens:      resetTokens,
 		passwordsManager: passwordsManager,
 	}
 }
@@ -32,7 +36,20 @@ type AuthService struct {
 	secret           string
 	usersService     usersRepository
 	sessionsService  sessionsRepository
+	resetTokens      passwordResetTokensRepository
 	passwordsManager *passwords.Manager
+
+	mailer       TemplateMailer
+	resetBaseURL string
+}
+
+// SetMailer wires optional password-reset email delivery. Called by
+// rrpc-auth's Module.Initialize() only when a "mailer" module is also
+// registered by the consuming application; leave unset (the default) to
+// make RequestPasswordReset a silent no-op — see RequestPasswordReset.
+func (s *AuthService) SetMailer(mailer TemplateMailer, baseURL string) {
+	s.mailer = mailer
+	s.resetBaseURL = baseURL
 }
 
 // Login validates credentials, creates a DB session, and returns a short-lived
@@ -110,6 +127,86 @@ func (s *AuthService) ChangePassword(userID, currentPassword, newPassword string
 	}
 
 	return true, s.usersService.UpdatePassword(userID, s.passwordsManager.Encode(newPassword))
+}
+
+// RequestPasswordReset always succeeds from the caller's perspective — it
+// deliberately never reveals whether username exists, is active, whether
+// a mailer is even configured, or whether the feature is administratively
+// disabled, since a differing response would let an attacker enumerate
+// valid usernames. It's a genuine no-op (no token created, no email sent)
+// whenever auth.passwordReset.enabled is false, the consuming application
+// hasn't wired a mailer via SetMailer, or username doesn't match an
+// active user.
+func (s *AuthService) RequestPasswordReset(username string) error {
+	if s.mailer == nil || !s.config.GetBool("auth.passwordReset.enabled") {
+		return nil
+	}
+
+	user, err := s.usersService.GetUserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if user == nil || !user.Active {
+		return nil
+	}
+
+	// Drop any previously issued, still-valid token for this user first —
+	// a user should never have more than one live reset link outstanding.
+	if err := s.resetTokens.DeleteUnusedForUser(user.ID); err != nil {
+		return err
+	}
+
+	rawToken, tokenHash, err := generateResetToken()
+	if err != nil {
+		return err
+	}
+
+	ttl := s.config.GetDuration("auth.passwordReset.tokenTTL")
+	if err := s.resetTokens.Create(user.ID, tokenHash, time.Now().Add(ttl)); err != nil {
+		return err
+	}
+
+	resetURL := s.resetBaseURL
+	if resetURL != "" {
+		sep := "?"
+		if strings.Contains(resetURL, "?") {
+			sep = "&"
+		}
+		resetURL += sep + "token=" + url.QueryEscape(rawToken)
+	}
+
+	return s.mailer.EnqueueTemplate(PasswordResetTemplateID, []string{user.Email}, nil, nil, PasswordResetData{
+		Username: user.Username,
+		ResetURL: resetURL,
+	})
+}
+
+// ConfirmPasswordReset validates token and, if valid (exists, unused,
+// unexpired), sets newPassword and invalidates every existing session for
+// that user — same "password changed, log in again everywhere" behavior a
+// security-conscious reset should have. Returns (false, nil) for every
+// invalid-token case (unknown, expired, already used, or the feature has
+// been administratively disabled since the token was issued) rather than
+// distinguishing them, so a guesser learns nothing from the response —
+// mirrors ChangePassword's (bool, error) shape for the same reason.
+func (s *AuthService) ConfirmPasswordReset(token, newPassword string) (bool, error) {
+	if !s.config.GetBool("auth.passwordReset.enabled") {
+		return false, nil
+	}
+
+	userID, ok, err := s.resetTokens.Consume(hashResetToken(token), time.Now())
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+
+	if err := s.usersService.UpdatePassword(userID.String(), s.passwordsManager.Encode(newPassword)); err != nil {
+		return false, err
+	}
+
+	return true, s.sessionsService.DeleteSessionsByUserID(userID.String())
 }
 
 // ParseAccessToken validates the access token cryptographically and returns

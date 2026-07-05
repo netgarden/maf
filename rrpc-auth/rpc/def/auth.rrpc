@@ -20,6 +20,15 @@ struct MeResponse {
     admin     bool
 }
 
+struct RequestPasswordResetRequest {
+    username string
+}
+
+struct ConfirmPasswordResetRequest {
+    token       string
+    newPassword string
+}
+
 error Unauthorized {
     code = 1
     http_code = 401
@@ -32,6 +41,12 @@ error BadCredentials {
     message = "invalid credentials"
 }
 
+error InvalidResetToken {
+    code = 6
+    http_code = 400
+    message = "invalid or expired reset token"
+}
+
 @Path("api/auth")
 service Auth {
     login(request LoginRequest) (LoginResponse)
@@ -39,4 +54,6 @@ service Auth {
     refresh() (RefreshResponse)
     @method("GET")
     me() (MeResponse)
+    requestPasswordReset(request RequestPasswordResetRequest)
+    confirmPasswordReset(request ConfirmPasswordResetRequest)
 }

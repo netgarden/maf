@@ -18,11 +18,13 @@ import (
 
 // mockAuth implements authService for testing.
 type mockAuth struct {
-	login      func(*authdto.CredentialsLoginRequest, string, string, bool) (string, *http.Cookie, error)
-	logout     func(string, bool) *http.Cookie
-	refresh    func(string) (string, error)
-	getUser    func(string) (*authentities.User, error)
-	cookieName string
+	login                func(*authdto.CredentialsLoginRequest, string, string, bool) (string, *http.Cookie, error)
+	logout               func(string, bool) *http.Cookie
+	refresh              func(string) (string, error)
+	getUser              func(string) (*authentities.User, error)
+	requestPasswordReset func(string) error
+	confirmPasswordReset func(string, string) (bool, error)
+	cookieName           string
 }
 
 func (m *mockAuth) Login(req *authdto.CredentialsLoginRequest, clientIP, userAgent string, secure bool) (string, *http.Cookie, error) {
@@ -51,6 +53,20 @@ func (m *mockAuth) GetUser(id string) (*authentities.User, error) {
 		return m.getUser(id)
 	}
 	return &authentities.User{Username: "default"}, nil
+}
+
+func (m *mockAuth) RequestPasswordReset(username string) error {
+	if m.requestPasswordReset != nil {
+		return m.requestPasswordReset(username)
+	}
+	return nil
+}
+
+func (m *mockAuth) ConfirmPasswordReset(token, newPassword string) (bool, error) {
+	if m.confirmPasswordReset != nil {
+		return m.confirmPasswordReset(token, newPassword)
+	}
+	return true, nil
 }
 
 func (m *mockAuth) SessionCookieName() string {
@@ -344,6 +360,90 @@ func TestRefresh_ServiceError_Returns500(t *testing.T) {
 	h := newTestServer(t, mock)
 
 	w := doWithCookie(t, h, "POST", "/api/auth/refresh", &http.Cookie{Name: "session", Value: "sess-id"})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+// --- POST /auth/requestPasswordReset ---
+
+func TestRequestPasswordReset_ForwardsUsernameAndReturns200(t *testing.T) {
+	var gotUsername string
+	mock := &mockAuth{
+		requestPasswordReset: func(username string) error {
+			gotUsername = username
+			return nil
+		},
+	}
+	h := newTestServer(t, mock)
+
+	w := do(t, h, "POST", "/api/auth/requestPasswordReset", "application/json", `{"username":"alice"}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body)
+	}
+	if gotUsername != "alice" {
+		t.Errorf("username: want 'alice', got %q", gotUsername)
+	}
+}
+
+func TestRequestPasswordReset_ServiceError_Returns500(t *testing.T) {
+	mock := &mockAuth{
+		requestPasswordReset: func(string) error { return errors.New("db down") },
+	}
+	h := newTestServer(t, mock)
+
+	w := do(t, h, "POST", "/api/auth/requestPasswordReset", "application/json", `{"username":"alice"}`)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+// --- POST /auth/confirmPasswordReset ---
+
+func TestConfirmPasswordReset_ValidToken_Returns200(t *testing.T) {
+	var gotToken, gotPassword string
+	mock := &mockAuth{
+		confirmPasswordReset: func(token, newPassword string) (bool, error) {
+			gotToken = token
+			gotPassword = newPassword
+			return true, nil
+		},
+	}
+	h := newTestServer(t, mock)
+
+	w := do(t, h, "POST", "/api/auth/confirmPasswordReset", "application/json", `{"token":"tok-123","newPassword":"newpass"}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body)
+	}
+	if gotToken != "tok-123" || gotPassword != "newpass" {
+		t.Errorf("token/newPassword: want 'tok-123'/'newpass', got %q/%q", gotToken, gotPassword)
+	}
+}
+
+func TestConfirmPasswordReset_InvalidToken_Returns400(t *testing.T) {
+	mock := &mockAuth{
+		confirmPasswordReset: func(string, string) (bool, error) { return false, nil },
+	}
+	h := newTestServer(t, mock)
+
+	w := do(t, h, "POST", "/api/auth/confirmPasswordReset", "application/json", `{"token":"bad","newPassword":"newpass"}`)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestConfirmPasswordReset_ServiceError_Returns500(t *testing.T) {
+	mock := &mockAuth{
+		confirmPasswordReset: func(string, string) (bool, error) { return false, errors.New("db down") },
+	}
+	h := newTestServer(t, mock)
+
+	w := do(t, h, "POST", "/api/auth/confirmPasswordReset", "application/json", `{"token":"tok","newPassword":"newpass"}`)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)

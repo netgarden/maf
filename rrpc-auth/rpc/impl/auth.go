@@ -17,6 +17,8 @@ type authService interface {
 	Refresh(sessionID string) (string, error)
 	GetUser(id string) (*authentities.User, error)
 	SessionCookieName() string
+	RequestPasswordReset(username string) error
+	ConfirmPasswordReset(token, newPassword string) (bool, error)
 }
 
 func NewAuthService(authService *mafauth.AuthService) rpc.AuthService {
@@ -89,4 +91,22 @@ func (s *AuthServiceImpl) Me(ctx *rrpc.Context) (*rpc.MeResponse, error) {
 		LastName:  user.LastName,
 		Admin:     user.Admin,
 	}, nil
+}
+
+func (s *AuthServiceImpl) RequestPasswordReset(ctx *rrpc.Context, req *rpc.RequestPasswordResetRequest) error {
+	if err := s.auth.RequestPasswordReset(req.Username); err != nil {
+		return rrpc.ErrRrpcInternalError.WithCause(err)
+	}
+	return nil
+}
+
+func (s *AuthServiceImpl) ConfirmPasswordReset(ctx *rrpc.Context, req *rpc.ConfirmPasswordResetRequest) error {
+	ok, err := s.auth.ConfirmPasswordReset(req.Token, req.NewPassword)
+	if err != nil {
+		return rrpc.ErrRrpcInternalError.WithCause(err)
+	}
+	if !ok {
+		return rpc.ErrInvalidResetToken
+	}
+	return nil
 }

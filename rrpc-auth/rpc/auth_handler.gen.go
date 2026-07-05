@@ -41,6 +41,18 @@ func newAuthServiceHandler(service AuthService) *AuthServiceHandler {
 			ContentType: "",
 			HandlerFunc: serviceHandler.handleMe,
 		},
+		{
+			Path:        rrpc.ParsePath("requestPasswordReset"),
+			Type:        "POST",
+			ContentType: "application/json",
+			HandlerFunc: serviceHandler.handleRequestPasswordReset,
+		},
+		{
+			Path:        rrpc.ParsePath("confirmPasswordReset"),
+			Type:        "POST",
+			ContentType: "application/json",
+			HandlerFunc: serviceHandler.handleConfirmPasswordReset,
+		},
 	}
 	serviceHandler.service = service
 
@@ -167,6 +179,56 @@ func (h *AuthServiceHandler) handleMe(ctx *rrpc.Context) error {
 	return nil
 }
 
+func (h *AuthServiceHandler) handleRequestPasswordReset(ctx *rrpc.Context) error {
+
+	reqPayload := &RequestPasswordResetRequest{}
+	reqBody, err := h.readBody(ctx.Request())
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(reqBody, reqPayload); err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to unmarshal request data: %w", err)
+	}
+	// Call service method implementation.
+	err1 := h.service.RequestPasswordReset(ctx, reqPayload)
+	if err1 != nil {
+		rpcErr, ok := err1.(rrpc.RRPCError)
+		if !ok {
+			rpcErr = rrpc.ErrRrpcEndpoint.WithCause(err1)
+		}
+		return rpcErr
+	}
+
+	// ctx.Response().WriteHeader(http.StatusOK)
+
+	return nil
+}
+
+func (h *AuthServiceHandler) handleConfirmPasswordReset(ctx *rrpc.Context) error {
+
+	reqPayload := &ConfirmPasswordResetRequest{}
+	reqBody, err := h.readBody(ctx.Request())
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(reqBody, reqPayload); err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to unmarshal request data: %w", err)
+	}
+	// Call service method implementation.
+	err1 := h.service.ConfirmPasswordReset(ctx, reqPayload)
+	if err1 != nil {
+		rpcErr, ok := err1.(rrpc.RRPCError)
+		if !ok {
+			rpcErr = rrpc.ErrRrpcEndpoint.WithCause(err1)
+		}
+		return rpcErr
+	}
+
+	// ctx.Response().WriteHeader(http.StatusOK)
+
+	return nil
+}
+
 func (h *AuthServiceHandler) readBody(r *http.Request) ([]byte, error) {
 	defer r.Body.Close()
 
@@ -279,6 +341,42 @@ func (h *AuthServiceClientHandler) Me(ctx context.Context) (*MeResponse, error) 
 	}
 
 	return out, nil
+}
+
+func (h *AuthServiceClientHandler) RequestPasswordReset(ctx context.Context, data *RequestPasswordResetRequest) error {
+
+	methodType := "POST"
+	methodPath := "requestPasswordReset"
+	url := h.client.url + "/" + h.path + "/" + methodPath
+
+	jsonBody, err := json.Marshal(data)
+	if err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
+	}
+	_, err = h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *AuthServiceClientHandler) ConfirmPasswordReset(ctx context.Context, data *ConfirmPasswordResetRequest) error {
+
+	methodType := "POST"
+	methodPath := "confirmPasswordReset"
+	url := h.client.url + "/" + h.path + "/" + methodPath
+
+	jsonBody, err := json.Marshal(data)
+	if err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
+	}
+	_, err = h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (h *AuthServiceClientHandler) doHttpRequest(ctx context.Context, method string, url string, contentType string, body io.Reader) (*SizedReadCloser, error) {

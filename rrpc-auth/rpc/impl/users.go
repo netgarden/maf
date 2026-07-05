@@ -39,12 +39,13 @@ func (s *UsersServiceImpl) List(ctx *rrpc.Context) (*rpc.ListUsersResponse, erro
 
 func (s *UsersServiceImpl) Create(ctx *rrpc.Context, req *rpc.CreateUserRequest) (*rpc.UserItem, error) {
 	created, err := s.users.CreateUser(&mafauthdto.UserCreateDTO{
-		Username:  req.Username,
-		Password:  req.Password,
-		Email:     req.Email,
-		FirstName: req.FirstName,
-		LastName:  req.LastName,
-		Admin:     req.Admin,
+		Username:             req.Username,
+		Password:             req.Password,
+		Email:                req.Email,
+		FirstName:            req.FirstName,
+		LastName:             req.LastName,
+		Admin:                req.Admin,
+		SendCredentialsEmail: req.SendCredentialsEmail,
 	})
 	if err != nil {
 		return nil, rrpc.ErrRrpcInternalError.WithCause(err)

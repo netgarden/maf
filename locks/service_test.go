@@ -35,12 +35,12 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to migrate locks table: %v", err)
 	}
 
-	if err := db.Exec("DELETE FROM locks").Error; err != nil {
+	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Lock{}).Error; err != nil {
 		t.Fatalf("failed to reset locks table: %v", err)
 	}
 
 	t.Cleanup(func() {
-		db.Exec("DELETE FROM locks")
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Lock{})
 	})
 
 	return db

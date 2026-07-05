@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -9,10 +10,31 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
 )
+
+// fakeCredentialsMailer records EnqueueTemplate calls in-memory instead of
+// touching a real mailer — CreateUser only depends on the narrow
+// CredentialsMailer interface, so no real maf/mailer.Service is needed to
+// test the wiring.
+type fakeCredentialsMailer struct {
+	calls []fakeCredentialsMailerCall
+	err   error
+}
+
+type fakeCredentialsMailerCall struct {
+	templateID  string
+	to, cc, bcc []string
+	data        any
+}
+
+func (f *fakeCredentialsMailer) EnqueueTemplate(templateID string, to, cc, bcc []string, data any) error {
+	f.calls = append(f.calls, fakeCredentialsMailerCall{templateID: templateID, to: to, cc: cc, bcc: bcc, data: data})
+	return f.err
+}
 
 // testDB connects to a real Postgres database and migrates the tables
 // EnsureAdminExists needs. Its concurrency guarantee (a Postgres advisory
@@ -37,8 +59,8 @@ func testDB(t *testing.T) *gorm.DB {
 	}
 
 	reset := func() {
-		db.Exec("DELETE FROM auth_users")
-		db.Exec("DELETE FROM locks")
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.User{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&locks.Lock{})
 	}
 	reset()
 	t.Cleanup(reset)
@@ -168,5 +190,116 @@ func TestEnsureAdminExists_UsesConfiguredPassword(t *testing.T) {
 	}
 	if !ok {
 		t.Error("expected the stored password hash to verify against the configured default password")
+	}
+}
+
+func TestCreateUser_SendCredentialsEmail_EnqueuesTemplate(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+	mailer := &fakeCredentialsMailer{}
+	svc.SetMailer(mailer, "https://example.com/login")
+
+	created, err := svc.CreateUser(&dto.UserCreateDTO{
+		Username:             "alice",
+		Password:             "s3cr3t",
+		Email:                "alice@example.com",
+		SendCredentialsEmail: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected the user to be created")
+	}
+
+	if len(mailer.calls) != 1 {
+		t.Fatalf("expected exactly 1 EnqueueTemplate call, got %d", len(mailer.calls))
+	}
+	call := mailer.calls[0]
+	if call.templateID != NewUserCredentialsTemplateID {
+		t.Errorf("templateID = %q, want %q", call.templateID, NewUserCredentialsTemplateID)
+	}
+	if len(call.to) != 1 || call.to[0] != "alice@example.com" {
+		t.Errorf("to = %v, want [alice@example.com]", call.to)
+	}
+	data, ok := call.data.(NewUserCredentialsData)
+	if !ok {
+		t.Fatalf("data = %#v, want NewUserCredentialsData", call.data)
+	}
+	if data.Username != "alice" || data.TemporaryPassword != "s3cr3t" || data.LoginURL != "https://example.com/login" {
+		t.Errorf("unexpected template data: %#v", data)
+	}
+}
+
+// A CreateUser call without the flag set (the default) must never touch
+// the mailer, whether or not one is wired — this is what makes the
+// feature opt-in per request rather than "on whenever a mailer exists."
+func TestCreateUser_WithoutSendCredentialsEmail_DoesNotEnqueue(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+	mailer := &fakeCredentialsMailer{}
+	svc.SetMailer(mailer, "")
+
+	if _, err := svc.CreateUser(&dto.UserCreateDTO{
+		Username: "bob",
+		Password: "s3cr3t",
+		Email:    "bob@example.com",
+	}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if len(mailer.calls) != 0 {
+		t.Errorf("expected no EnqueueTemplate calls, got %d", len(mailer.calls))
+	}
+}
+
+// A nil CredentialsMailer (the zero value — an app that never registers a
+// "mailer" module) must make SendCredentialsEmail a silent no-op rather
+// than a nil-pointer panic.
+func TestCreateUser_SendCredentialsEmail_NilMailerIsNoop(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	created, err := svc.CreateUser(&dto.UserCreateDTO{
+		Username:             "carol",
+		Password:             "s3cr3t",
+		Email:                "carol@example.com",
+		SendCredentialsEmail: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected the user to be created")
+	}
+}
+
+// A failed enqueue must not undo the already-created user — the email is
+// a best-effort notification, not part of the user's own correctness.
+func TestCreateUser_SendCredentialsEmail_EnqueueErrorDoesNotFailCreate(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+	mailer := &fakeCredentialsMailer{err: errors.New("mailer unavailable")}
+	svc.SetMailer(mailer, "")
+
+	created, err := svc.CreateUser(&dto.UserCreateDTO{
+		Username:             "dave",
+		Password:             "s3cr3t",
+		Email:                "dave@example.com",
+		SendCredentialsEmail: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected the user to still be created despite the enqueue error")
+	}
+
+	found, err := svc.GetUserByUsername("dave")
+	if err != nil {
+		t.Fatalf("GetUserByUsername: %v", err)
+	}
+	if found == nil {
+		t.Error("expected the user to be persisted despite the enqueue error")
 	}
 }

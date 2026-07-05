@@ -7,12 +7,13 @@ import (
 // -- Structs ---------------------------------------------
 
 type CreateUserRequest struct {
-	Username  string `json:"username"`
-	Password  string `json:"password"`
-	Email     string `json:"email"`
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-	Admin     bool   `json:"admin"`
+	Username             string `json:"username"`
+	Password             string `json:"password"`
+	Email                string `json:"email"`
+	FirstName            string `json:"firstName"`
+	LastName             string `json:"lastName"`
+	Admin                bool   `json:"admin"`
+	SendCredentialsEmail bool   `json:"sendCredentialsEmail"`
 }
 
 type ListUsersResponse struct {

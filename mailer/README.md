@@ -99,7 +99,7 @@ tick. `jobs` already solves the first problem generically (only one
 replica's tick runs at a time, coordinated via `locks`), but that alone
 doesn't solve the second — an admin API call isn't part of any tick.
 
-So the actual claim mechanism is per-row, not per-tick: `mailer_emails` has
+So the actual claim mechanism is per-row, not per-tick: `mailer_queue` has
 `status`/`claim_token`/`claimed_at`/`claim_expires_at` columns, and both
 the batch tick claim and a single-row admin retry/cancel are conditional
 `UPDATE`s that only affect a row if it's currently in a claimable state.
@@ -152,7 +152,7 @@ not `mailer`'s) — see "Encryption at rest" below.
 ## Encryption at rest
 
 `Email.BodyText`/`BodyHTML` are encrypted (AES-256-GCM) before being
-written to `mailer_emails`, using `maf/security`'s `GetEncryptionManager()`
+written to `mailer_queue`, using `maf/security`'s `GetEncryptionManager()`
 — configured via `security.encryption.key`, **deliberately separate** from
 `security.secret` (used elsewhere for JWT signing). This is entirely an
 internal storage-layer detail: every public `Service` method (`Enqueue`,
@@ -187,7 +187,7 @@ that text-encoding step is `mailer`'s own concern, not
 
 ## A known gap in the underlying `.rrpc` DSL
 
-`def/mailer.rrpc` uses plain, always-present string fields (e.g.
+`rpc/def/mailer.rrpc` uses plain, always-present string fields (e.g.
 `lastError string`, empty = unset) instead of the DSL's documented `field?
 type` optional-field syntax — that syntax isn't actually implemented
 anywhere in `rrpc-def`'s lexer/parser (confirmed: it's mentioned in

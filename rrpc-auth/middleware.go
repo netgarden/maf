@@ -27,11 +27,15 @@ func NewAuthenticationMiddleware(authSvc *services.AuthService) rrpc.Middleware 
 }
 
 // authPaths are the rrpc-auth module's own endpoints, exempted when
-// allowAuthPaths is true.
+// allowAuthPaths is true. requestPasswordReset/confirmPasswordReset are
+// necessarily public too — they're how a logged-out user recovers access
+// in the first place.
 var authPaths = []string{
 	"/api/auth/login",
 	"/api/auth/logout",
 	"/api/auth/refresh",
+	"/api/auth/requestPasswordReset",
+	"/api/auth/confirmPasswordReset",
 }
 
 // NewAuthorizationMiddleware returns a middleware that enforces authentication
@@ -39,7 +43,8 @@ var authPaths = []string{
 // authentication middleware so the user ID is already in context.
 //
 // allowAuthPaths — when true, the rrpc-auth module's own endpoints
-// (login, logout, refresh) are automatically allowed without a token.
+// (login, logout, refresh, requestPasswordReset, confirmPasswordReset)
+// are automatically allowed without a token.
 //
 // isPublic — called for every request; return true to allow access without
 // a token (e.g. signup, health-check). May be nil when allowAuthPaths alone

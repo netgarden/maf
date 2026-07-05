@@ -11,3 +11,10 @@ type User = entities.User
 type AuthService = services.AuthService
 type SessionsService = services.SessionsService
 type UsersService = services.UsersService
+
+type TemplateMailer = services.TemplateMailer
+type NewUserCredentialsData = services.NewUserCredentialsData
+type PasswordResetData = services.PasswordResetData
+
+const NewUserCredentialsTemplateID = services.NewUserCredentialsTemplateID
+const PasswordResetTemplateID = services.PasswordResetTemplateID

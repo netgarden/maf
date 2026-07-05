@@ -28,6 +28,7 @@ struct CreateUserRequest {
     firstName string
     lastName  string
     admin     bool
+    sendCredentialsEmail bool
 }
 
 error UserNotFound {

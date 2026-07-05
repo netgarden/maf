@@ -44,8 +44,8 @@ func testDB(t *testing.T) *gorm.DB {
 	}
 
 	reset := func() {
-		db.Exec("DELETE FROM mailer_emails")
-		db.Exec("DELETE FROM mailer_templates")
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Email{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Template{})
 	}
 	reset()
 	t.Cleanup(reset)
@@ -155,17 +155,17 @@ func TestEnqueue_EncryptsBodyAtRest(t *testing.T) {
 		t.Errorf("expected Enqueue's own return value to be plaintext, got: %q", email.BodyText)
 	}
 
-	var rawBodyText, rawBodyHTML string
-	err = db.Raw("SELECT body_text, body_html FROM mailer_emails WHERE id = ?", email.ID).
-		Row().Scan(&rawBodyText, &rawBodyHTML)
+	var raw Email
+	err = db.Select("body_text", "body_html").First(&raw, "id = ?", email.ID).Error
 	if err != nil {
 		t.Fatalf("raw row query: %v", err)
 	}
+	rawBodyText := raw.BodyText
 
 	if rawBodyText == plainText {
 		t.Fatal("expected the stored body_text column to be ciphertext, not plaintext")
 	}
-	if rawBodyHTML == html {
+	if raw.BodyHTML == nil || *raw.BodyHTML == html {
 		t.Fatal("expected the stored body_html column to be ciphertext, not plaintext")
 	}
 

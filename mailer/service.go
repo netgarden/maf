@@ -206,11 +206,11 @@ func (s *Service) ProcessBatch(ctx context.Context) error {
 }
 
 // claimBatch atomically claims up to s.batchSize due (or abandoned) rows
-// using SELECT ... FOR UPDATE SKIP LOCKED, then loads the full rows via a
-// normal GORM Find — done as two statements in one transaction, rather
-// than a single UPDATE ... RETURNING * scanned directly, so GORM's usual
-// field/serializer handling (needed for the JSON-serialized To/Cc/Bcc
-// columns) is guaranteed to apply when populating the returned structs.
+// using SELECT ... FOR UPDATE SKIP LOCKED, then returns the full claimed
+// rows via the UPDATE's own RETURNING clause — GORM's usual field/
+// serializer handling (needed for the JSON-serialized To/Cc/Bcc columns)
+// still applies when populating claimed, since it's scanned as a slice of
+// Email rather than raw column values.
 func (s *Service) claimBatch() ([]Email, error) {
 
 	claimToken := uuid.NewV4().String()
@@ -221,33 +221,25 @@ func (s *Service) claimBatch() ([]Email, error) {
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 
-		var ids []uuid.UUID
-		err := tx.Raw(`
-			UPDATE mailer_emails SET status = ?, claim_token = ?, claimed_at = ?,
-				claim_expires_at = ?, attempts = attempts + 1, last_attempt_at = ?
-			WHERE id IN (
-				SELECT id FROM mailer_emails
-				WHERE (status = ? AND next_attempt_at <= ?)
-				   OR (status = ? AND claim_expires_at < ?)
-				ORDER BY next_attempt_at
-				LIMIT ?
-				FOR UPDATE SKIP LOCKED
-			)
-			RETURNING id`,
-			EmailStatusSending, claimToken, now, claimExpiresAt, now,
-			EmailStatusQueued, now,
-			EmailStatusSending, now,
-			s.batchSize,
-		).Scan(&ids).Error
-		if err != nil {
-			return err
-		}
+		claimable := tx.Model(&Email{}).
+			Select("id").
+			Where("(status = ? AND next_attempt_at <= ?) OR (status = ? AND claim_expires_at < ?)",
+				EmailStatusQueued, now, EmailStatusSending, now).
+			Order("next_attempt_at").
+			Limit(s.batchSize).
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
 
-		if len(ids) == 0 {
-			return nil
-		}
-
-		return tx.Where("id IN ?", ids).Find(&claimed).Error
+		return tx.Clauses(clause.Returning{}).
+			Model(&claimed).
+			Where("id IN (?)", claimable).
+			Updates(map[string]interface{}{
+				"status":           EmailStatusSending,
+				"claim_token":      claimToken,
+				"claimed_at":       now,
+				"claim_expires_at": claimExpiresAt,
+				"attempts":         gorm.Expr("attempts + 1"),
+				"last_attempt_at":  now,
+			}).Error
 	})
 	if err != nil {
 		return nil, err

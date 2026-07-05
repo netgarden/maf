@@ -31,6 +31,9 @@ func (m *Module) GetDependencies() []string {
 	return []string{"auth"}
 }
 
+// Initialize is pure plumbing — rrpc-auth is only the RPC interface for
+// maf/auth's services, so it does no business-logic wiring of its own
+// (e.g. registering mailer templates: see auth.Module.Initialize instead).
 func (m *Module) Initialize() error {
 	authMod, ok := m.manager.GetModule("auth").(*mafauth.Module)
 	if !ok {
@@ -39,11 +42,12 @@ func (m *Module) Initialize() error {
 	m.authModule = authMod
 
 	authSvc := authMod.GetServicesManager().GetAuthService()
+	usersSvc := authMod.GetServicesManager().GetUsersService()
 
 	m.rrpcModule = rpc.NewModule()
 	m.rrpcModule.SetAuthService(impl.NewAuthService(authSvc))
 	m.rrpcModule.SetProfileService(impl.NewProfileService(authSvc))
-	m.rrpcModule.SetUsersService(impl.NewUsersService(authMod.GetServicesManager().GetUsersService()))
+	m.rrpcModule.SetUsersService(impl.NewUsersService(usersSvc))
 
 	return nil
 }
