@@ -13,6 +13,8 @@ package mailer
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/netgarden/maf/mailer/rpc"
@@ -79,6 +81,28 @@ func (s *mailerRPCService) Cancel(ctx *rrpc.Context) (*rpc.EmailItem, error) {
 	email, err := s.svc.CancelEmail(id)
 	if err != nil {
 		return nil, mapEmailStateError(err)
+	}
+	item := toEmailItem(*email)
+	return &item, nil
+}
+
+// SendTest sends a real, immediate test email (via Service.Send, so it
+// attempts direct delivery rather than waiting for the next queue tick) —
+// the row it creates behaves exactly like any other queued email, showing
+// up in the same list/retry/cancel machinery, so there's nothing test-mode
+// specific about it beyond the canned subject/body.
+func (s *mailerRPCService) SendTest(ctx *rrpc.Context, req *rpc.SendTestEmailRequest) (*rpc.EmailItem, error) {
+	if strings.TrimSpace(req.To) == "" {
+		return nil, rpc.ErrTestEmailRecipientRequired
+	}
+
+	email, err := s.svc.Send(&SendRequest{
+		To:       []string{req.To},
+		Subject:  "Test email",
+		BodyText: fmt.Sprintf("This is a test email sent from the mailer admin API to verify your SMTP configuration.\n\nSent at %s.", time.Now().Format(time.RFC3339)),
+	})
+	if err != nil {
+		return nil, rrpc.ErrRrpcInternalError.WithCause(err)
 	}
 	item := toEmailItem(*email)
 	return &item, nil

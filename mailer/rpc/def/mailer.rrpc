@@ -77,6 +77,16 @@ error TemplateInvalid {
     message = "template failed to parse"
 }
 
+struct SendTestEmailRequest {
+    to string
+}
+
+error TestEmailRecipientRequired {
+    code = 6
+    http_code = 400
+    message = "recipient email address is required"
+}
+
 @Path("api/admin/mailer")
 service Mailer {
     @method("GET")
@@ -92,6 +102,9 @@ service Mailer {
 
     @Path("{id:string}/cancel")
     cancel() (EmailItem)
+
+    @Path("send-test")
+    sendTest(request SendTestEmailRequest) (EmailItem)
 
     @method("GET")
     @Path("templates")

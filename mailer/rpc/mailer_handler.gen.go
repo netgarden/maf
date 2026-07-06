@@ -44,6 +44,12 @@ func newMailerServiceHandler(service MailerService) *MailerServiceHandler {
 			HandlerFunc: serviceHandler.handleCancel,
 		},
 		{
+			Path:        rrpc.ParsePath("send-test"),
+			Type:        "POST",
+			ContentType: "application/json",
+			HandlerFunc: serviceHandler.handleSendTest,
+		},
+		{
 			Path:        rrpc.ParsePath("templates"),
 			Type:        "GET",
 			ContentType: "",
@@ -176,6 +182,39 @@ func (h *MailerServiceHandler) handleCancel(ctx *rrpc.Context) error {
 
 	// Call service method implementation.
 	ret0, err1 := h.service.Cancel(ctx)
+	if err1 != nil {
+		rpcErr, ok := err1.(rrpc.RRPCError)
+		if !ok {
+			rpcErr = rrpc.ErrRrpcEndpoint.WithCause(err1)
+		}
+		return rpcErr
+	}
+
+	// ctx.Response().WriteHeader(http.StatusOK)
+
+	respBody, err := json.Marshal(ret0)
+	if err != nil {
+		return rrpc.ErrRrpcBadResponse.WithCausef("failed to marshal json response: %w", err)
+	}
+
+	ctx.Response().Header().Set("Content-Type", "application/json")
+	ctx.Response().Write(respBody)
+
+	return nil
+}
+
+func (h *MailerServiceHandler) handleSendTest(ctx *rrpc.Context) error {
+
+	reqPayload := &SendTestEmailRequest{}
+	reqBody, err := h.readBody(ctx.Request())
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(reqBody, reqPayload); err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to unmarshal request data: %w", err)
+	}
+	// Call service method implementation.
+	ret0, err1 := h.service.SendTest(ctx, reqPayload)
 	if err1 != nil {
 		rpcErr, ok := err1.(rrpc.RRPCError)
 		if !ok {
@@ -403,6 +442,34 @@ func (h *MailerServiceClientHandler) Cancel(ctx context.Context, id string) (*Em
 	url := h.client.url + "/" + h.path + "/" + methodPath
 
 	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &EmailItem{}
+	defer r.Close()
+	respBody, err := h.readAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return nil, rrpc.ErrRrpcBadResponse.WithCausef("failed to unmarshal response: %w", err)
+	}
+
+	return out, nil
+}
+
+func (h *MailerServiceClientHandler) SendTest(ctx context.Context, data *SendTestEmailRequest) (*EmailItem, error) {
+
+	methodType := "POST"
+	methodPath := "send-test"
+	url := h.client.url + "/" + h.path + "/" + methodPath
+
+	jsonBody, err := json.Marshal(data)
+	if err != nil {
+		return nil, rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
+	}
+	r, err := h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}

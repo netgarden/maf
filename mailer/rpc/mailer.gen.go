@@ -40,6 +40,10 @@ type ListTemplatesResponse struct {
 	Items []TemplateItem `json:"items"`
 }
 
+type SendTestEmailRequest struct {
+	To string `json:"to"`
+}
+
 type TemplateItem struct {
 	Id           string `json:"id"`
 	Subject      string `json:"subject"`
@@ -62,6 +66,7 @@ type MailerService interface {
 	Get(ctx *rrpc.Context) (*EmailItem, error)
 	Retry(ctx *rrpc.Context) (*EmailItem, error)
 	Cancel(ctx *rrpc.Context) (*EmailItem, error)
+	SendTest(ctx *rrpc.Context, request *SendTestEmailRequest) (*EmailItem, error)
 	ListTemplates(ctx *rrpc.Context) (*ListTemplatesResponse, error)
 	GetTemplate(ctx *rrpc.Context) (*TemplateItem, error)
 	UpdateTemplate(ctx *rrpc.Context, request *UpdateTemplateRequest) (*TemplateItem, error)
@@ -80,4 +85,6 @@ var (
 	ErrTemplateInvalid = rrpc.RRPCError{Code: 5, Name: "TemplateInvalid", Message: "template failed to parse", HTTPStatus: 400}
 
 	ErrTemplateNotFound = rrpc.RRPCError{Code: 4, Name: "TemplateNotFound", Message: "template not found", HTTPStatus: 404}
+
+	ErrTestEmailRecipientRequired = rrpc.RRPCError{Code: 6, Name: "TestEmailRecipientRequired", Message: "recipient email address is required", HTTPStatus: 400}
 )
