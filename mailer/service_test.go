@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -14,6 +15,11 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/netgarden/maf/security/encryption"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // testEncryption is shared by every test in this file — encryption is an
@@ -24,17 +30,118 @@ func testEncryption() *encryption.Manager {
 	return encryption.NewManager("test-encryption-secret")
 }
 
-// testDB connects to a real Postgres database and migrates mailer's
-// tables. See README.md for what MAF_MAILER_TEST_DSN should point at.
+// Postgres (testDSN/testDSNErr) and Mailpit (testSMTPHost/testSMTPPort/
+// testMailpitAPIBase/testMailpitErr) are both started once by TestMain,
+// before any test in this package runs — see TestMain.
+var (
+	testDSN    string
+	testDSNErr error
+
+	testSMTPHost       string
+	testSMTPPort       int
+	testMailpitAPIBase string
+	testMailpitErr     error
+)
+
+// TestMain starts one disposable Postgres container (for Service's own
+// tests, in this file) and one disposable Mailpit container (for
+// SMTPSender's tests, in smtp_test.go) for this package's entire test run,
+// instead of requiring a human to have already started either beforehand.
+// Both are reused by every test in this package and torn down once, after
+// all tests finish — cheaper than a container-per-test and matching this
+// suite's previous "one long-lived dev Postgres/SMTP server shared by the
+// whole run" performance characteristics. testDB resets its tables between
+// individual tests, and smtp_test.go's tests clear Mailpit's mailbox
+// between tests — that's what actually gives tests isolation from each
+// other, same as before.
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	pg, pgErr := tcpostgres.Run(ctx, "postgres:17-alpine",
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+	)
+	if pgErr != nil {
+		testDSNErr = pgErr
+	} else {
+		testDSN, testDSNErr = pg.ConnectionString(ctx, "sslmode=disable")
+		if testDSNErr == nil {
+			testDSNErr = waitForPostgresReady(testDSN)
+		}
+	}
+
+	mailpit, mpErr := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "axllent/mailpit:v1.30.3",
+			ExposedPorts: []string{"1025/tcp", "8025/tcp"},
+			WaitingFor:   wait.ForListeningPort("8025/tcp"),
+		},
+		Started: true,
+	})
+	if mpErr != nil {
+		testMailpitErr = mpErr
+	} else {
+		host, hostErr := mailpit.Host(ctx)
+		smtpPort, smtpErr := mailpit.MappedPort(ctx, "1025/tcp")
+		httpPort, httpErr := mailpit.MappedPort(ctx, "8025/tcp")
+		switch {
+		case hostErr != nil:
+			testMailpitErr = hostErr
+		case smtpErr != nil:
+			testMailpitErr = smtpErr
+		case httpErr != nil:
+			testMailpitErr = httpErr
+		default:
+			testSMTPHost = host
+			testSMTPPort = int(smtpPort.Num())
+			testMailpitAPIBase = "http://" + host + ":" + httpPort.Port()
+		}
+	}
+
+	code := m.Run()
+
+	if pg != nil {
+		_ = pg.Terminate(ctx)
+	}
+	if mailpit != nil {
+		_ = mailpit.Terminate(ctx)
+	}
+	os.Exit(code)
+}
+
+// waitForPostgresReady retries a plain ping for a few seconds — the
+// container's own readiness signal (log line + port check) fires slightly
+// before the mapped port reliably accepts connections in this environment,
+// so the first real connection attempt can otherwise land in that gap.
+func waitForPostgresReady(dsn string) error {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	deadline := time.Now().Add(20 * time.Second)
+	var pingErr error
+	for time.Now().Before(deadline) {
+		if pingErr = db.Ping(); pingErr == nil {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return pingErr
+}
+
+// testDB connects to the Postgres container TestMain started and migrates
+// mailer's tables.
 func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	dsn := os.Getenv("MAF_MAILER_TEST_DSN")
-	if dsn == "" {
-		t.Skip("MAF_MAILER_TEST_DSN not set; skipping mailer integration tests (see README.md)")
+	if testDSNErr != nil {
+		t.Skipf("postgres testcontainer unavailable (Docker required): %v", testDSNErr)
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(postgres.Open(testDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("failed to connect to test database: %v", err)
 	}
@@ -226,7 +333,7 @@ func TestClaimBatch_ConcurrentClaimersGetDisjointSets(t *testing.T) {
 
 	// Two Service instances with their own DB connections, standing in for
 	// two application replicas racing to claim the same batch.
-	db2, err := gorm.Open(postgres.Open(os.Getenv("MAF_MAILER_TEST_DSN")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db2, err := gorm.Open(postgres.Open(testDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("failed to open second connection: %v", err)
 	}

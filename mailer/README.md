@@ -249,13 +249,17 @@ types, `omitempty`) beyond this module's own scope.
 Pure logic (`backoff.go`, `mime.go`, `templates.go`'s render/validate path)
 is tested with no database or network — see `backoff_test.go`,
 `mime_test.go`, `templates_test.go`. `Service`'s database-backed behavior,
-including the concurrent-claim proof, needs a real Postgres:
+including the concurrent-claim proof, needs a real Postgres, and
+`SMTPSender`'s own tests (`smtp_test.go`) need a real SMTP server to prove
+it actually dials/authenticates/sends correctly rather than only being
+exercised through the `Sender` interface via a fake. `TestMain`
+(`service_test.go`) starts both — Postgres and
+[Mailpit](https://mailpit.axllent.org/) — via `testcontainers-go` (Docker
+required), so no manual setup is needed:
 
 ```bash
-createdb maf_mailer_test  # once
-MAF_MAILER_TEST_DSN="host=localhost user=citadel password=citadel dbname=maf_mailer_test port=5432 sslmode=disable" \
-  go test ./... -race
+go test ./... -race
 ```
 
-Tests are skipped (not failed) when `MAF_MAILER_TEST_DSN` is unset. Run
-with `-race` — the claim path has real concurrency to get right.
+Tests are skipped (not failed) if Docker isn't available. Run with
+`-race` — the claim path has real concurrency to get right.

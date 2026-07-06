@@ -1,10 +1,13 @@
 package services
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -14,6 +17,9 @@ import (
 	"github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // fakeCredentialsMailer records SendTemplate calls in-memory instead of
@@ -36,20 +42,82 @@ func (f *fakeCredentialsMailer) SendTemplate(templateID string, to, cc, bcc []st
 	return f.err
 }
 
-// testDB connects to a real Postgres database and migrates the tables
-// EnsureAdminExists needs. Its concurrency guarantee (a Postgres advisory
-// lock, via locks.Service) can't be meaningfully verified against a mock —
-// see README.md (or set MAF_AUTH_TEST_DSN directly) for how to run these.
+// testDSN/testDSNErr are set once by TestMain, before any test in this
+// package runs — see TestMain for why the container itself is started
+// there rather than per-test.
+var (
+	testDSN    string
+	testDSNErr error
+)
+
+// TestMain starts a single disposable Postgres container for this
+// package's entire test run (instead of requiring a human to have already
+// run `createdb`/started a long-lived Postgres beforehand) and tears it
+// down once, after every test has finished — cheaper than a
+// container-per-test and matches this suite's previous "one long-lived
+// dev Postgres shared by the whole run" performance characteristics.
+// testDB (below) resets its tables between individual tests, which is what
+// actually gives each test isolation from the others.
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	pg, err := tcpostgres.Run(ctx, "postgres:17-alpine",
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+	)
+	if err != nil {
+		// Docker unavailable (or some other startup failure) — record it so
+		// testDB can t.Skip each test individually instead of aborting the
+		// whole binary.
+		testDSNErr = err
+		os.Exit(m.Run())
+	}
+
+	testDSN, testDSNErr = pg.ConnectionString(ctx, "sslmode=disable")
+	if testDSNErr == nil {
+		testDSNErr = waitForPostgresReady(testDSN)
+	}
+
+	code := m.Run()
+	_ = pg.Terminate(ctx)
+	os.Exit(code)
+}
+
+// waitForPostgresReady retries a plain ping for a few seconds — the
+// container's own readiness signal (log line + port check) fires slightly
+// before the mapped port reliably accepts connections in this environment,
+// so the first real connection attempt can otherwise land in that gap.
+func waitForPostgresReady(dsn string) error {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	deadline := time.Now().Add(20 * time.Second)
+	var pingErr error
+	for time.Now().Before(deadline) {
+		if pingErr = db.Ping(); pingErr == nil {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return pingErr
+}
+
+// testDB connects to the Postgres container TestMain started and migrates
+// the tables EnsureAdminExists needs. Its concurrency guarantee (a
+// Postgres advisory lock, via locks.Service) can't be meaningfully
+// verified against a mock, hence a real database rather than one.
 func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	dsn := os.Getenv("MAF_AUTH_TEST_DSN")
-	if dsn == "" {
-		t.Skip("MAF_AUTH_TEST_DSN not set; skipping auth integration tests, e.g.:\n" +
-			`MAF_AUTH_TEST_DSN="host=localhost user=citadel password=citadel dbname=maf_auth_test port=5432 sslmode=disable" go test ./...`)
+	if testDSNErr != nil {
+		t.Skipf("postgres testcontainer unavailable (Docker required): %v", testDSNErr)
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(postgres.Open(testDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("failed to connect to test database: %v", err)
 	}
@@ -127,7 +195,6 @@ func TestEnsureAdminExists_NoopWhenAdminAlreadyExists(t *testing.T) {
 // against an empty table. Exactly one admin user must exist afterward.
 func TestEnsureAdminExists_ConcurrentReplicasCreateExactlyOneAdmin(t *testing.T) {
 	db := testDB(t)
-	dsn := os.Getenv("MAF_AUTH_TEST_DSN")
 
 	const n = 8
 	var wg sync.WaitGroup
@@ -142,7 +209,7 @@ func TestEnsureAdminExists_ConcurrentReplicasCreateExactlyOneAdmin(t *testing.T)
 			// goroutine, so this genuinely exercises cross-connection
 			// serialization rather than relying on Go-level mutexes that
 			// wouldn't exist across real, separate replica processes.
-			replicaDB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			replicaDB, err := gorm.Open(postgres.Open(testDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 			if err != nil {
 				errs[i] = err
 				return

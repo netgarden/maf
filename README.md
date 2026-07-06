@@ -152,15 +152,25 @@ There's no workspace-level test command; run tests per module. Most
 modules have none yet. Where they exist:
 
 - `auth/services` — plain unit tests against small repository interfaces
-  (mocked), no database needed.
+  (mocked) alongside genuine Postgres-backed integration tests (mocking
+  can't verify `EnsureAdminExists`'s advisory-lock-backed concurrency
+  guarantee): `go test ./... -race`.
 - `locks` — integration tests against a real Postgres (advisory locks can't
-  be meaningfully mocked): `MAF_LOCKS_TEST_DSN=... go test ./...`. Skipped,
-  not failed, if the env var is unset. See `locks/README.md`.
+  be meaningfully mocked): `go test ./...`. See `locks/README.md`.
 - `jobs` — scheduler logic is tested in-memory against a mock, no database
-  needed; DB-backed behavior needs `MAF_JOBS_TEST_DSN=... go test ./... -race`.
+  needed; DB-backed behavior needs a real Postgres too: `go test ./... -race`.
   See `jobs/README.md`.
+- `mailer` — pure logic (backoff, MIME building, template rendering) is
+  tested with no database or network; `Service`'s DB-backed behavior and
+  `SMTPSender`'s real-SMTP behavior both need external services:
+  `go test ./... -race`. See `mailer/README.md`.
 - Core framework (this directory) — module lifecycle, dependency
   resolution, and cycle detection, all in-memory: `go test .`.
+
+Every DB/SMTP-backed suite above provisions its own disposable service via
+`testcontainers-go` (`TestMain` in each package) — Docker is required, but
+no manual `createdb`/env var setup. Tests are skipped (not failed) if
+Docker isn't available.
 
 ## Known limitations
 

@@ -88,12 +88,12 @@ Other things worth knowing:
 
 Correctness here depends on real Postgres semantics (advisory locks,
 transaction isolation) — there's no meaningful way to mock it, so the tests
-are integration tests that need a real database:
+are integration tests that need a real database. `TestMain`
+(`service_test.go`) starts one itself via `testcontainers-go` (Docker
+required), so no manual setup is needed:
 
 ```bash
-createdb maf_locks_test  # once
-MAF_LOCKS_TEST_DSN="host=localhost user=citadel password=citadel dbname=maf_locks_test port=5432 sslmode=disable" \
-  go test ./...
+go test ./...
 ```
 
-Tests are skipped (not failed) when `MAF_LOCKS_TEST_DSN` is unset.
+Tests are skipped (not failed) if Docker isn't available.

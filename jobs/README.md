@@ -123,13 +123,13 @@ If you're comparing against the module this was migrated from:
 
 `Manager`'s scheduling logic is tested in-memory against a mock (no
 database needed — see `manager_test.go`). `Service`'s database-backed
-behavior needs a real Postgres:
+behavior needs a real Postgres — `TestMain` (`service_test.go`) starts one
+itself via `testcontainers-go` (Docker required), so no manual setup is
+needed:
 
 ```bash
-createdb maf_jobs_test  # once
-MAF_JOBS_TEST_DSN="host=localhost user=citadel password=citadel dbname=maf_jobs_test port=5432 sslmode=disable" \
-  go test ./... -race
+go test ./... -race
 ```
 
-Tests are skipped (not failed) when `MAF_JOBS_TEST_DSN` is unset. Run with
+Tests are skipped (not failed) if Docker isn't available. Run with
 `-race` — this package has real concurrency to get right.
