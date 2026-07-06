@@ -101,7 +101,7 @@ func (h *MailerServiceHandler) Methods() []rrpc.MethodHolder {
 
 func (h *MailerServiceHandler) handleList(ctx *rrpc.Context) error {
 
-	reqPayload := &ListEmailsRequest{}
+	reqPayload := &DatatableRequest{}
 	if err := rrpc.DecodeQueryParams(ctx.Request().URL.Query(), reqPayload); err != nil {
 		return rrpc.ErrRrpcBadRequest.WithCausef("failed to decode query params: %w", err)
 	}
@@ -360,7 +360,7 @@ type MailerServiceClientHandler struct {
 	client *Client
 }
 
-func (h *MailerServiceClientHandler) List(ctx context.Context, data *ListEmailsRequest) (*ListEmailsResponse, error) {
+func (h *MailerServiceClientHandler) List(ctx context.Context, data *DatatableRequest) (*ListEmailsResponse, error) {
 
 	methodType := "GET"
 	url := h.client.url + "/" + h.path

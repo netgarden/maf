@@ -1,3 +1,5 @@
+include "../../../datatables/def/datatable.rrpc"
+
 struct EmailItem {
     id string
     to []string
@@ -14,18 +16,9 @@ struct EmailItem {
     gaveUpAt string
 }
 
-struct ListEmailsRequest {
-    status string
-    search string
-    page int
-    pageSize int
-}
-
 struct ListEmailsResponse {
-    items []EmailItem
-    total int
-    page int
-    pageSize int
+    items    []EmailItem
+    pageInfo DatatablePageInfo
 }
 
 error EmailNotFound {
@@ -91,7 +84,7 @@ error TestEmailRecipientRequired {
 service Mailer {
     @method("GET")
     @Path("")
-    list(request ListEmailsRequest) (ListEmailsResponse)
+    list(request DatatableRequest) (ListEmailsResponse)
 
     @method("GET")
     @Path("{id:string}")

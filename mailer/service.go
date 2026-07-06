@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/security/encryption"
 )
 
@@ -425,58 +426,38 @@ func (s *Service) PurgeOldEmails(cfg RetentionConfig) (int64, error) {
 	return total, nil
 }
 
-// ListEmailsFilter is the admin API's list/filter/pagination request.
-type ListEmailsFilter struct {
-	Status   string
-	Search   string
-	Page     int
-	PageSize int
+// emailColumns declares Email's queryable fields for ListEmails: which
+// are sortable, and — if filterable — the single operator applied
+// whenever a request's Filters has a value for it (see datatables.Column).
+var emailColumns = []datatables.Column{
+	{Name: "subject", DBColumn: "subject", Sortable: true, FilterOperator: datatables.Contains},
+	{Name: "status", DBColumn: "status", Sortable: true, FilterOperator: datatables.Eq},
+	{Name: "createdAt", DBColumn: "created_at", Sortable: true},
 }
 
-type ListEmailsResult struct {
-	Items    []Email
-	Total    int64
-	Page     int
-	PageSize int
-}
-
-func (s *Service) ListEmails(filter ListEmailsFilter) (*ListEmailsResult, error) {
-
-	page := filter.Page
-	if page < 1 {
-		page = 1
-	}
-	pageSize := filter.PageSize
-	if pageSize < 1 {
-		pageSize = 20
+// ListEmails returns a filtered, sorted, paginated page of emails per q.
+// When q.SortBy is unset, emails are ordered newest-first by default —
+// datatables.Apply itself only adds an ORDER BY when a sort is actually
+// requested, so the default (matching this endpoint's original hard-coded
+// behavior) lives here on the base query instead.
+func (s *Service) ListEmails(q datatables.Query) (*datatables.Result[Email], error) {
+	db := s.db.Model(&Email{})
+	if q.SortBy == "" {
+		db = db.Order("created_at DESC")
 	}
 
-	query := s.db.Model(&Email{})
-	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
-	}
-	if filter.Search != "" {
-		query = query.Where("subject ILIKE ?", "%"+filter.Search+"%")
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, err
-	}
-
-	var items []Email
-	err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
+	result, err := datatables.Apply[Email](db, emailColumns, q)
 	if err != nil {
 		return nil, err
 	}
 
-	for i := range items {
-		if err := s.decryptBody(&items[i]); err != nil {
+	for i := range result.Items {
+		if err := s.decryptBody(&result.Items[i]); err != nil {
 			return nil, err
 		}
 	}
 
-	return &ListEmailsResult{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+	return result, nil
 }
 
 // GetEmail returns (nil, nil) when id doesn't exist, matching this

@@ -3,16 +3,17 @@ module github.com/netgarden/maf/mailer
 go 1.26.1
 
 require (
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/netgarden/maf v0.0.0-20250327102624-f25d54ddf786
 	github.com/netgarden/maf/database v0.0.0-00010101000000-000000000000
+	github.com/netgarden/maf/datatables v0.0.0-00010101000000-000000000000
 	github.com/netgarden/maf/jobs v0.0.0-00010101000000-000000000000
 	github.com/netgarden/maf/security v0.0.0-00010101000000-000000000000
 	github.com/netgarden/rrpc v0.0.0-00010101000000-000000000000
 	github.com/satori/go.uuid v1.2.0
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
-	gorm.io/driver/postgres v1.5.11
+	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.0
 )
 
@@ -82,6 +83,8 @@ require (
 replace github.com/netgarden/maf => ..
 
 replace github.com/netgarden/maf/database => ../database
+
+replace github.com/netgarden/maf/datatables => ../datatables
 
 replace github.com/netgarden/maf/jobs => ../jobs
 

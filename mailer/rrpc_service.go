@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/mailer/rpc"
 	"github.com/netgarden/rrpc"
 )
@@ -29,14 +30,18 @@ type mailerRPCService struct {
 	svc *Service
 }
 
-func (s *mailerRPCService) List(ctx *rrpc.Context, req *rpc.ListEmailsRequest) (*rpc.ListEmailsResponse, error) {
-	result, err := s.svc.ListEmails(ListEmailsFilter{
-		Status:   req.Status,
-		Search:   req.Search,
+func (s *mailerRPCService) List(ctx *rrpc.Context, req *rpc.DatatableRequest) (*rpc.ListEmailsResponse, error) {
+	result, err := s.svc.ListEmails(datatables.Query{
 		Page:     req.Page,
 		PageSize: req.PageSize,
+		SortBy:   req.SortBy,
+		SortDir:  datatables.SortDir(req.SortDir),
+		Filters:  req.Filters,
 	})
 	if err != nil {
+		if errors.Is(err, datatables.ErrUnknownSortColumn) || errors.Is(err, datatables.ErrUnknownFilterColumn) {
+			return nil, rrpc.ErrRrpcBadRequest.WithCause(err)
+		}
 		return nil, rrpc.ErrRrpcInternalError.WithCause(err)
 	}
 
@@ -46,10 +51,12 @@ func (s *mailerRPCService) List(ctx *rrpc.Context, req *rpc.ListEmailsRequest) (
 	}
 
 	return &rpc.ListEmailsResponse{
-		Items:    items,
-		Total:    int(result.Total),
-		Page:     result.Page,
-		PageSize: result.PageSize,
+		Items: items,
+		PageInfo: rpc.DatatablePageInfo{
+			TotalCount: int(result.TotalCount),
+			Page:       req.Page,
+			PageSize:   req.PageSize,
+		},
 	}, nil
 }
 

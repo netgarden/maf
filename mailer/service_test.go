@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/security/encryption"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -912,5 +913,133 @@ func TestPurgeOldEmails_NeverTouchesQueuedOrSending(t *testing.T) {
 		if got == nil {
 			t.Errorf("expected %s to survive purging regardless of retention window", id)
 		}
+	}
+}
+
+// --- ListEmails ---
+
+func TestListEmails_DefaultOrderIsNewestFirst(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	first, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "first", BodyText: "hi"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond) // ensure a distinct created_at ordering
+	second, err := svc.Send(&SendRequest{To: []string{"b@example.com"}, Subject: "second", BodyText: "hi"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	result, err := svc.ListEmails(datatables.Query{})
+	if err != nil {
+		t.Fatalf("ListEmails: %v", err)
+	}
+	if len(result.Items) != 2 || result.Items[0].ID != second.ID || result.Items[1].ID != first.ID {
+		t.Errorf("expected newest-first default order, got %+v", result.Items)
+	}
+}
+
+func TestListEmails_FiltersBySubjectContains(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	if _, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "invoice ready", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := svc.Send(&SendRequest{To: []string{"b@example.com"}, Subject: "welcome aboard", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	result, err := svc.ListEmails(datatables.Query{Filters: map[string]string{"subject": "invoice"}})
+	if err != nil {
+		t.Fatalf("ListEmails: %v", err)
+	}
+	if result.TotalCount != 1 || len(result.Items) != 1 || result.Items[0].Subject != "invoice ready" {
+		t.Errorf("expected only the invoice email to match, got count=%d items=%+v", result.TotalCount, result.Items)
+	}
+}
+
+func TestListEmails_FiltersByStatusEq(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	queued, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "a", BodyText: "hi"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := svc.Send(&SendRequest{To: []string{"b@example.com"}, Subject: "b", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := db.Model(&Email{}).Where("id = ?", queued.ID).Update("status", EmailStatusSent).Error; err != nil {
+		t.Fatalf("failed to mark email sent: %v", err)
+	}
+
+	result, err := svc.ListEmails(datatables.Query{Filters: map[string]string{"status": string(EmailStatusSent)}})
+	if err != nil {
+		t.Fatalf("ListEmails: %v", err)
+	}
+	if result.TotalCount != 1 || len(result.Items) != 1 || result.Items[0].ID != queued.ID {
+		t.Errorf("expected only the sent email to match, got count=%d items=%+v", result.TotalCount, result.Items)
+	}
+}
+
+func TestListEmails_SortBySubjectAscOverridesDefault(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	if _, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "zeta", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := svc.Send(&SendRequest{To: []string{"b@example.com"}, Subject: "alpha", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	result, err := svc.ListEmails(datatables.Query{SortBy: "subject", SortDir: datatables.Asc})
+	if err != nil {
+		t.Fatalf("ListEmails: %v", err)
+	}
+	if len(result.Items) != 2 || result.Items[0].Subject != "alpha" || result.Items[1].Subject != "zeta" {
+		t.Errorf("expected subject asc order, got %+v", result.Items)
+	}
+}
+
+func TestListEmails_RejectsUnknownFilterColumn(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	_, err := svc.ListEmails(datatables.Query{Filters: map[string]string{"does_not_exist": "x"}})
+	if !errors.Is(err, datatables.ErrUnknownFilterColumn) {
+		t.Errorf("expected ErrUnknownFilterColumn, got %v", err)
+	}
+}
+
+func TestListEmails_TotalCountReflectsFiltersNotPagination(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	for i := 0; i < 5; i++ {
+		if _, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "invoice ready", BodyText: "hi"}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+	if _, err := svc.Send(&SendRequest{To: []string{"b@example.com"}, Subject: "welcome aboard", BodyText: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	result, err := svc.ListEmails(datatables.Query{
+		Filters:  map[string]string{"subject": "invoice"},
+		Page:     0,
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListEmails: %v", err)
+	}
+	if result.TotalCount != 5 {
+		t.Errorf("expected TotalCount 5 (independent of PageSize), got %d", result.TotalCount)
+	}
+	if len(result.Items) != 2 {
+		t.Errorf("expected 2 items on this page, got %d", len(result.Items))
 	}
 }

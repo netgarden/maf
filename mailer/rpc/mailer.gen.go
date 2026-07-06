@@ -22,18 +22,9 @@ type EmailItem struct {
 	GaveUpAt      string   `json:"gaveUpAt"`
 }
 
-type ListEmailsRequest struct {
-	Status   string `json:"status"`
-	Search   string `json:"search"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"pageSize"`
-}
-
 type ListEmailsResponse struct {
-	Items    []EmailItem `json:"items"`
-	Total    int         `json:"total"`
-	Page     int         `json:"page"`
-	PageSize int         `json:"pageSize"`
+	Items    []EmailItem       `json:"items"`
+	PageInfo DatatablePageInfo `json:"pageInfo"`
 }
 
 type ListTemplatesResponse struct {
@@ -62,7 +53,7 @@ type UpdateTemplateRequest struct {
 // -- Services --------------------------------------------
 
 type MailerService interface {
-	List(ctx *rrpc.Context, request *ListEmailsRequest) (*ListEmailsResponse, error)
+	List(ctx *rrpc.Context, request *DatatableRequest) (*ListEmailsResponse, error)
 	Get(ctx *rrpc.Context) (*EmailItem, error)
 	Retry(ctx *rrpc.Context) (*EmailItem, error)
 	Cancel(ctx *rrpc.Context) (*EmailItem, error)
