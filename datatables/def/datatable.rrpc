@@ -1,0 +1,13 @@
+struct DatatableRequest {
+    page     int
+    pageSize int
+    sortBy   string
+    sortDir  string
+    filters  map[string]string
+}
+
+struct DatatablePageInfo {
+    totalCount int
+    page       int
+    pageSize   int
+}
