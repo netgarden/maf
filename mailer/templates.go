@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrTemplateNotFound is returned by GetTemplate/ResetTemplate/EnqueueTemplate
+// ErrTemplateNotFound is returned by GetTemplate/ResetTemplate/SendTemplate
 // when templateID was never registered by any module and has no override
 // either — a typo'd ID or a forgotten module import, not a normal runtime
 // condition.

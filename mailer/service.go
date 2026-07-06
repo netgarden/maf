@@ -23,15 +23,16 @@ var (
 	ErrTemplateInvalid = errors.New("mailer: template failed to parse")
 )
 
-func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int, claimTimeout time.Duration, encryptionManager *encryption.Manager) *Service {
+func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int, claimTimeout time.Duration, encryptionManager *encryption.Manager, directSendTimeout time.Duration) *Service {
 	return &Service{
-		db:           db,
-		sender:       sender,
-		retryCfg:     retryCfg,
-		batchSize:    batchSize,
-		claimTimeout: claimTimeout,
-		templates:    newTemplateRegistry(),
-		encryption:   encryptionManager,
+		db:                db,
+		sender:            sender,
+		retryCfg:          retryCfg,
+		batchSize:         batchSize,
+		claimTimeout:      claimTimeout,
+		templates:         newTemplateRegistry(),
+		encryption:        encryptionManager,
+		directSendTimeout: directSendTimeout,
 	}
 }
 
@@ -43,13 +44,14 @@ func NewService(db *gorm.DB, sender Sender, retryCfg RetryConfig, batchSize int,
 // triage, and templates are closer to code/config than data — the actual
 // sensitive content only exists once rendered into a specific queued Email.
 type Service struct {
-	db           *gorm.DB
-	sender       Sender
-	retryCfg     RetryConfig
-	batchSize    int
-	claimTimeout time.Duration
-	templates    *templateRegistry
-	encryption   *encryption.Manager
+	db                *gorm.DB
+	sender            Sender
+	retryCfg          RetryConfig
+	batchSize         int
+	claimTimeout      time.Duration
+	templates         *templateRegistry
+	encryption        *encryption.Manager
+	directSendTimeout time.Duration
 }
 
 // encryptBody encrypts email's BodyText (always) and BodyHTML (if set) in
@@ -106,8 +108,8 @@ func (s *Service) decryptBody(email *Email) error {
 	return nil
 }
 
-// EnqueueRequest is the content of a not-yet-rendered email to queue.
-type EnqueueRequest struct {
+// SendRequest is the content of a not-yet-rendered email to queue.
+type SendRequest struct {
 	To       []string
 	Cc       []string
 	Bcc      []string
@@ -116,15 +118,26 @@ type EnqueueRequest struct {
 	BodyHTML *string
 }
 
-func (s *Service) Enqueue(req *EnqueueRequest) (*Email, error) {
-	return s.EnqueueTx(s.db, req)
+// Send writes req's row via EnqueueTx (autocommitted, since s.db is not an
+// open caller transaction) and then attempts to deliver it right away in
+// the background — see tryDeliverDirect. Use EnqueueTx directly if you need
+// the enqueue to participate in your own transaction; that variant never
+// attempts direct delivery, since its row isn't guaranteed to be committed
+// when it returns.
+func (s *Service) Send(req *SendRequest) (*Email, error) {
+	email, err := s.EnqueueTx(s.db, req)
+	if err != nil {
+		return nil, err
+	}
+	s.tryDeliverDirect(email)
+	return email, nil
 }
 
 // EnqueueTx enqueues within an existing transaction, so a caller can enqueue
 // an email inside the same transaction as the business action that
 // triggers it — a rollback of that transaction also rolls back the
 // enqueue.
-func (s *Service) EnqueueTx(tx *gorm.DB, req *EnqueueRequest) (*Email, error) {
+func (s *Service) EnqueueTx(tx *gorm.DB, req *SendRequest) (*Email, error) {
 	email := &Email{
 		To:            req.To,
 		Cc:            req.Cc,
@@ -154,16 +167,13 @@ func (s *Service) EnqueueTx(tx *gorm.DB, req *EnqueueRequest) (*Email, error) {
 	return email, nil
 }
 
-// EnqueueTemplate resolves templateID (an admin override if one exists,
-// else the module-registered default), renders it with data, and enqueues
-// the result exactly like Enqueue — from this point on there's no
-// difference between a templated and a directly-enqueued email.
-func (s *Service) EnqueueTemplate(templateID string, to, cc, bcc []string, data any) (*Email, error) {
-	return s.EnqueueTemplateTx(s.db, templateID, to, cc, bcc, data)
-}
-
-func (s *Service) EnqueueTemplateTx(tx *gorm.DB, templateID string, to, cc, bcc []string, data any) (*Email, error) {
-	tmpl, err := s.resolveTemplate(tx, templateID)
+// SendTemplate resolves templateID (an admin override if one exists, else
+// the module-registered default), renders it with data, and enqueues the
+// result via Send — from this point on there's no difference between a
+// templated and a directly-enqueued email, including the direct-delivery
+// attempt Send makes.
+func (s *Service) SendTemplate(templateID string, to, cc, bcc []string, data any) (*Email, error) {
+	tmpl, err := s.resolveTemplate(s.db, templateID)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +183,7 @@ func (s *Service) EnqueueTemplateTx(tx *gorm.DB, templateID string, to, cc, bcc 
 		return nil, err
 	}
 
-	return s.EnqueueTx(tx, &EnqueueRequest{
+	return s.Send(&SendRequest{
 		To: to, Cc: cc, Bcc: bcc,
 		Subject: subject, BodyText: bodyText, BodyHTML: bodyHTML,
 	})
@@ -255,6 +265,60 @@ func (s *Service) claimBatch() ([]Email, error) {
 	}
 
 	return claimed, nil
+}
+
+// claimByID atomically claims a single queued, due email for immediate
+// sending — the same "conditional UPDATE, check RowsAffected" idiom
+// RetryEmail/CancelEmail use for their own single-row state transitions,
+// just transitioning to "sending" instead of back to "queued"/"cancelled".
+// Unlike claimBatch, no SELECT ... FOR UPDATE SKIP LOCKED subquery is
+// needed here — a single conditional UPDATE by primary key is already
+// atomic. Returns (nil, nil) if the row is no longer claimable (most
+// commonly: the periodic tick's claimBatch already claimed it first) — this
+// is what makes a direct-send attempt racing the tick harmless rather than
+// a double send.
+func (s *Service) claimByID(id string) (*Email, error) {
+	now := time.Now()
+	result := s.db.Model(&Email{}).
+		Where("id = ? AND status = ? AND next_attempt_at <= ?", id, EmailStatusQueued, now).
+		Updates(map[string]interface{}{
+			"status":           EmailStatusSending,
+			"claim_token":      uuid.NewV4().String(),
+			"claimed_at":       now,
+			"claim_expires_at": now.Add(s.claimTimeout),
+			"attempts":         gorm.Expr("attempts + 1"),
+			"last_attempt_at":  now,
+		})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	return s.GetEmail(id)
+}
+
+// tryDeliverDirect attempts to send email right away instead of waiting up
+// to tickInterval for the next scheduled ProcessBatch — bounded by
+// directSendTimeout so a slow/unreachable SMTP server can't hang around
+// forever; if it doesn't finish in time, the row is simply left claimable
+// and the next tick sends it normally. Runs in its own goroutine so Send
+// never blocks its caller on an SMTP round-trip.
+func (s *Service) tryDeliverDirect(email *Email) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), s.directSendTimeout)
+		defer cancel()
+
+		claimed, err := s.claimByID(email.ID.String())
+		if err != nil {
+			slog.Error("mailer: direct-send claim failed", slog.Any("error", err), slog.String("id", email.ID.String()))
+			return
+		}
+		if claimed == nil {
+			return // already claimed elsewhere (e.g. the periodic tick) — not our job anymore
+		}
+		s.sendAndFinalize(ctx, *claimed)
+	}()
 }
 
 func (s *Service) sendAndFinalize(ctx context.Context, email Email) {

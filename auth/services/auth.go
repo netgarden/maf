@@ -175,7 +175,7 @@ func (s *AuthService) RequestPasswordReset(username string) error {
 		resetURL += sep + "token=" + url.QueryEscape(rawToken)
 	}
 
-	return s.mailer.EnqueueTemplate(PasswordResetTemplateID, []string{user.Email}, nil, nil, PasswordResetData{
+	return s.mailer.SendTemplate(PasswordResetTemplateID, []string{user.Email}, nil, nil, PasswordResetData{
 		Username: user.Username,
 		ResetURL: resetURL,
 	})

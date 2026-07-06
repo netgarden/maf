@@ -28,7 +28,7 @@ modules = append(modules, mailer.NewModule())
 mailerModule := manager.GetModule("mailer").(*mailer.Module)
 service := mailerModule.GetService()
 
-email, err := service.Enqueue(&mailer.EnqueueRequest{
+email, err := service.Send(&mailer.SendRequest{
     To:      []string{"user@example.com"},
     Subject: "Welcome",
     BodyText: "Hello!",
@@ -39,6 +39,17 @@ email, err := service.Enqueue(&mailer.EnqueueRequest{
 of the business action that triggered the email also rolls back the
 enqueue — useful when sending mail is a side effect of some other write
 (e.g. user creation).
+
+`Send` (not `EnqueueTx`) additionally tries to deliver the email right
+away, in the background, instead of waiting for the next queue tick (up to
+`mailer.queue.tickInterval` away) — bounded by
+`mailer.queue.directSendTimeout`. `EnqueueTx` never does this: its row isn't
+guaranteed to be committed when it returns (that depends on the caller's own
+transaction), so attempting delivery there could send mail for an action
+that later rolls back. If the direct attempt doesn't finish in time or
+fails, the row is simply left queued exactly as before, and the normal
+tick/backoff machinery sends it — see "Concurrency" below for why this can
+never race the tick into a double send.
 
 ## Templates
 
@@ -55,7 +66,7 @@ mailerModule.GetService().RegisterTemplate(mailer.TemplateDefault{
     Description: "Variables: Username, TemporaryPassword, LoginURL",
 })
 
-email, err := mailerModule.GetService().EnqueueTemplate(
+email, err := mailerModule.GetService().SendTemplate(
     "auth.new-user-credentials",
     []string{user.Email}, nil, nil,
     map[string]any{"Username": user.Username, "TemporaryPassword": tempPassword, "LoginURL": loginURL},
@@ -64,11 +75,12 @@ email, err := mailerModule.GetService().EnqueueTemplate(
 
 Template IDs should follow the convention `<moduleID>.<name>` (e.g.
 `auth.new-user-credentials`) to avoid collisions between modules — not
-enforced by code, just convention. `EnqueueTemplate` renders once,
-synchronously, at enqueue time and then calls the exact same `EnqueueTx` a
-direct `Enqueue` call would — an email already queued is never affected by
-a template edit made after it was enqueued, and there's no special-casing
-for templated vs. direct emails anywhere in the queue/retry machinery.
+enforced by code, just convention. `SendTemplate` renders once,
+synchronously, at enqueue time and then calls the exact same `Send` a
+direct call would (including its direct-delivery attempt) — an email
+already queued is never affected by a template edit made after it was
+enqueued, and there's no special-casing for templated vs. direct emails
+anywhere in the queue/retry machinery.
 
 Subject and plain-text bodies render via `text/template`; HTML bodies
 render via `html/template`, which auto-escapes template data — this
@@ -93,21 +105,27 @@ middleware, these routes are unprotected.
 
 ## Concurrency: how no email gets sent twice
 
-Two things could otherwise cause a double send: two replicas' recurring
-ticks racing each other, and an admin-triggered "retry now" call racing a
-tick. `jobs` already solves the first problem generically (only one
-replica's tick runs at a time, coordinated via `locks`), but that alone
-doesn't solve the second — an admin API call isn't part of any tick.
+Three things could otherwise cause a double send: two replicas' recurring
+ticks racing each other, an admin-triggered "retry now" call racing a tick,
+and now `Send`'s direct-delivery attempt racing a tick that claims the
+same just-enqueued row first. `jobs` already solves the first problem
+generically (only one replica's tick runs at a time, coordinated via
+`locks`), but that alone doesn't solve the other two — neither an admin API
+call nor `Send`'s background goroutine is part of any tick.
 
 So the actual claim mechanism is per-row, not per-tick: `mailer_queue` has
-`status`/`claim_token`/`claimed_at`/`claim_expires_at` columns, and both
-the batch tick claim and a single-row admin retry/cancel are conditional
-`UPDATE`s that only affect a row if it's currently in a claimable state.
-Whichever commits first wins; the other affects 0 rows. The batch claim
-additionally uses `SELECT ... FOR UPDATE SKIP LOCKED` so multiple
-concurrent claimers (in principle, if `batchSize`/`tickInterval` were tuned
-such that overlapping ticks were possible) partition the eligible rows
-between them instead of blocking on each other.
+`status`/`claim_token`/`claimed_at`/`claim_expires_at` columns, and the batch
+tick claim, a single-row admin retry/cancel, and `Send`'s direct-send
+claim (`claimByID`) are all conditional `UPDATE`s that only affect a row if
+it's currently in a claimable state. Whichever commits first wins; the
+other affects 0 rows — for `Send`, that just means the direct-send
+goroutine quietly does nothing and the tick's own attempt (or its result)
+stands. The batch claim additionally uses `SELECT ... FOR UPDATE SKIP
+LOCKED` so multiple concurrent claimers (in principle, if
+`batchSize`/`tickInterval` were tuned such that overlapping ticks were
+possible) partition the eligible rows between them instead of blocking on
+each other; `claimByID` doesn't need that, since a plain conditional
+`UPDATE` by primary key is already atomic for a single row.
 
 This intentionally does **not** use `locks` for per-email coordination —
 `locks`'s Postgres-advisory-lock model fits "run this one named task
@@ -141,6 +159,7 @@ applied per email row instead of per job.
 | `mailer.queue.batchSize` | int | `20` | emails claimed per tick |
 | `mailer.queue.claimTimeout` | duration | `2m` | claim lease / jobs lock lease |
 | `mailer.queue.tickInterval` | duration | `15s` | how often the queue is checked |
+| `mailer.queue.directSendTimeout` | duration | `10s` | how long `Send`'s direct-delivery attempt may run before being abandoned (the row is simply left queued for the next tick) |
 
 `smtp.encryption` is validated at startup (`Initialize()`), not at first
 send — an unknown value fails the application to start rather than failing
@@ -155,7 +174,7 @@ not `mailer`'s) — see "Encryption at rest" below.
 written to `mailer_queue`, using `maf/security`'s `GetEncryptionManager()`
 — configured via `security.encryption.key`, **deliberately separate** from
 `security.secret` (used elsewhere for JWT signing). This is entirely an
-internal storage-layer detail: every public `Service` method (`Enqueue`,
+internal storage-layer detail: every public `Service` method (`Send`,
 `GetEmail`, `ListEmails`, the batch claim feeding the actual SMTP send) is
 still plaintext in, plaintext out — nothing about the public API changes.
 

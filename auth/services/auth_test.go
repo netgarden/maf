@@ -636,7 +636,7 @@ func TestRequestPasswordReset_InactiveUser_IsNoop(t *testing.T) {
 	}
 }
 
-func TestRequestPasswordReset_HappyPath_EnqueuesTemplateAndCreatesToken(t *testing.T) {
+func TestRequestPasswordReset_HappyPath_SendsTemplateAndCreatesToken(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
@@ -653,7 +653,7 @@ func TestRequestPasswordReset_HappyPath_EnqueuesTemplateAndCreatesToken(t *testi
 		t.Fatalf("expected exactly 1 token to be created, got %d", len(tokens.tokens))
 	}
 	if len(mailer.calls) != 1 {
-		t.Fatalf("expected exactly 1 EnqueueTemplate call, got %d", len(mailer.calls))
+		t.Fatalf("expected exactly 1 SendTemplate call, got %d", len(mailer.calls))
 	}
 	call := mailer.calls[0]
 	if call.templateID != PasswordResetTemplateID {

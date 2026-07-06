@@ -65,6 +65,14 @@ func (m *Module) GetConfigSchema() []maf.ConfigItem {
 		{Name: "mailer.queue.batchSize", Type: maf.Int, DefaultValue: 20},
 		{Name: "mailer.queue.claimTimeout", Type: maf.Duration, DefaultValue: 2 * time.Minute},
 		{Name: "mailer.queue.tickInterval", Type: maf.Duration, DefaultValue: 15 * time.Second},
+
+		// How long Send's direct-delivery attempt (see service.go's
+		// tryDeliverDirect) is allowed to run before being abandoned —
+		// shorter than smtp.timeout since this is a "fast path, don't hold
+		// it open too long" attempt, not the definitive send attempt (the
+		// queue tick remains that; an abandoned attempt just leaves the row
+		// queued for the next tick).
+		{Name: "mailer.queue.directSendTimeout", Type: maf.Duration, DefaultValue: 10 * time.Second},
 	}
 }
 
@@ -109,7 +117,8 @@ func (m *Module) Initialize() error {
 	}
 
 	claimTimeout := cfg.GetDuration("queue.claimTimeout")
-	m.service = NewService(m.db, sender, retryCfg, cfg.GetInt("queue.batchSize"), claimTimeout, securityModule.GetEncryptionManager())
+	directSendTimeout := cfg.GetDuration("queue.directSendTimeout")
+	m.service = NewService(m.db, sender, retryCfg, cfg.GetInt("queue.batchSize"), claimTimeout, securityModule.GetEncryptionManager(), directSendTimeout)
 
 	jobsModule.GetService().RegisterHandler("mailer-tick", NewTickHandler(m.service))
 
@@ -140,8 +149,8 @@ func (m *Module) GetRRPCModules() []rrpc.ServerModule {
 }
 
 // GetService returns the mailer service, available after Initialize — this
-// is the module's public API: Enqueue/EnqueueTx for plain emails,
-// RegisterTemplate/EnqueueTemplate(Tx) for templated ones.
+// is the module's public API: Send/EnqueueTx for plain emails,
+// RegisterTemplate/SendTemplate for templated ones.
 func (m *Module) GetService() *Service {
 	return m.service
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/netgarden/maf/security/passwords"
 )
 
-// fakeCredentialsMailer records EnqueueTemplate calls in-memory instead of
+// fakeCredentialsMailer records SendTemplate calls in-memory instead of
 // touching a real mailer — CreateUser only depends on the narrow
 // CredentialsMailer interface, so no real maf/mailer.Service is needed to
 // test the wiring.
@@ -31,7 +31,7 @@ type fakeCredentialsMailerCall struct {
 	data        any
 }
 
-func (f *fakeCredentialsMailer) EnqueueTemplate(templateID string, to, cc, bcc []string, data any) error {
+func (f *fakeCredentialsMailer) SendTemplate(templateID string, to, cc, bcc []string, data any) error {
 	f.calls = append(f.calls, fakeCredentialsMailerCall{templateID: templateID, to: to, cc: cc, bcc: bcc, data: data})
 	return f.err
 }
@@ -193,7 +193,7 @@ func TestEnsureAdminExists_UsesConfiguredPassword(t *testing.T) {
 	}
 }
 
-func TestCreateUser_SendCredentialsEmail_EnqueuesTemplate(t *testing.T) {
+func TestCreateUser_SendCredentialsEmail_SendsTemplate(t *testing.T) {
 	db := testDB(t)
 	svc := newTestUsersService(t, db)
 	mailer := &fakeCredentialsMailer{}
@@ -213,7 +213,7 @@ func TestCreateUser_SendCredentialsEmail_EnqueuesTemplate(t *testing.T) {
 	}
 
 	if len(mailer.calls) != 1 {
-		t.Fatalf("expected exactly 1 EnqueueTemplate call, got %d", len(mailer.calls))
+		t.Fatalf("expected exactly 1 SendTemplate call, got %d", len(mailer.calls))
 	}
 	call := mailer.calls[0]
 	if call.templateID != NewUserCredentialsTemplateID {
@@ -234,7 +234,7 @@ func TestCreateUser_SendCredentialsEmail_EnqueuesTemplate(t *testing.T) {
 // A CreateUser call without the flag set (the default) must never touch
 // the mailer, whether or not one is wired — this is what makes the
 // feature opt-in per request rather than "on whenever a mailer exists."
-func TestCreateUser_WithoutSendCredentialsEmail_DoesNotEnqueue(t *testing.T) {
+func TestCreateUser_WithoutSendCredentialsEmail_DoesNotSend(t *testing.T) {
 	db := testDB(t)
 	svc := newTestUsersService(t, db)
 	mailer := &fakeCredentialsMailer{}
@@ -249,7 +249,7 @@ func TestCreateUser_WithoutSendCredentialsEmail_DoesNotEnqueue(t *testing.T) {
 	}
 
 	if len(mailer.calls) != 0 {
-		t.Errorf("expected no EnqueueTemplate calls, got %d", len(mailer.calls))
+		t.Errorf("expected no SendTemplate calls, got %d", len(mailer.calls))
 	}
 }
 
@@ -274,9 +274,9 @@ func TestCreateUser_SendCredentialsEmail_NilMailerIsNoop(t *testing.T) {
 	}
 }
 
-// A failed enqueue must not undo the already-created user — the email is
+// A failed send must not undo the already-created user — the email is
 // a best-effort notification, not part of the user's own correctness.
-func TestCreateUser_SendCredentialsEmail_EnqueueErrorDoesNotFailCreate(t *testing.T) {
+func TestCreateUser_SendCredentialsEmail_SendErrorDoesNotFailCreate(t *testing.T) {
 	db := testDB(t)
 	svc := newTestUsersService(t, db)
 	mailer := &fakeCredentialsMailer{err: errors.New("mailer unavailable")}
@@ -292,7 +292,7 @@ func TestCreateUser_SendCredentialsEmail_EnqueueErrorDoesNotFailCreate(t *testin
 		t.Fatalf("CreateUser: %v", err)
 	}
 	if created == nil {
-		t.Fatal("expected the user to still be created despite the enqueue error")
+		t.Fatal("expected the user to still be created despite the send error")
 	}
 
 	found, err := svc.GetUserByUsername("dave")
@@ -300,6 +300,6 @@ func TestCreateUser_SendCredentialsEmail_EnqueueErrorDoesNotFailCreate(t *testin
 		t.Fatalf("GetUserByUsername: %v", err)
 	}
 	if found == nil {
-		t.Error("expected the user to be persisted despite the enqueue error")
+		t.Error("expected the user to be persisted despite the send error")
 	}
 }

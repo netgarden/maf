@@ -81,13 +81,13 @@ func (s *UsersService) CreateUser(data *dto.UserCreateDTO) (*entities.User, erro
 	// created user, it's just logged — the admin who created the account
 	// can always retry via the mail queue's own admin UI.
 	if data.SendCredentialsEmail && s.mailer != nil {
-		err := s.mailer.EnqueueTemplate(NewUserCredentialsTemplateID, []string{user.Email}, nil, nil, NewUserCredentialsData{
+		err := s.mailer.SendTemplate(NewUserCredentialsTemplateID, []string{user.Email}, nil, nil, NewUserCredentialsData{
 			Username:          user.Username,
 			TemporaryPassword: data.Password,
 			LoginURL:          s.loginURL,
 		})
 		if err != nil {
-			slog.Error("auth: failed to enqueue new-user-credentials email", slog.Any("error", err), slog.String("username", user.Username))
+			slog.Error("auth: failed to send new-user-credentials email", slog.Any("error", err), slog.String("username", user.Username))
 		}
 	}
 

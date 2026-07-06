@@ -2,7 +2,7 @@ package services
 
 // TemplateMailer is the minimal mailer capability this package needs to
 // send templated notification emails — narrowed from
-// mailer.Service.EnqueueTemplate so this package doesn't need to depend on
+// mailer.Service.SendTemplate so this package doesn't need to depend on
 // github.com/netgarden/maf/mailer directly. rrpc-auth's Module wires a
 // real implementation in via each service's own SetMailer
 // (UsersService.SetMailer, AuthService.SetMailer) only when a "mailer"
@@ -10,7 +10,7 @@ package services
 // corresponding feature (dto.UserCreateDTO.SendCredentialsEmail,
 // AuthService.RequestPasswordReset) is simply a no-op.
 type TemplateMailer interface {
-	EnqueueTemplate(templateID string, to, cc, bcc []string, data any) error
+	SendTemplate(templateID string, to, cc, bcc []string, data any) error
 }
 
 // NewUserCredentialsTemplateID is the mailer template ID rrpc-auth's

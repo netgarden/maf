@@ -89,9 +89,6 @@ func (m *Module) GetDBEntities() []interface{} {
 		&entities.User{},
 		&entities.Session{},
 		&entities.PasswordResetToken{},
-		// locks.Lock is not listed here — it's locks.Module's own entity
-		// (registered via its GetDBEntities()), and "locks" is now a hard
-		// GetDependencies() entry above, so it's guaranteed to be present.
 	}
 }
 
@@ -126,35 +123,51 @@ func (m *Module) Initialize() error {
 		return err
 	}
 
+	err = m.registerMailTemplates()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Module) registerMailTemplates() error {
+
 	// Optional: only wired when the consuming application also registers
 	// maf/mailer. Registers sensible defaults for each notification
 	// email's content — an admin can customize their wording afterward via
 	// mailer's own admin API (UpdateTemplate), same as any other template.
-	if mailerMod, ok := m.manager.GetModule("mailer").(*mailer.Module); ok {
-		mailerSvc := mailerMod.GetService()
 
-		err = mailerSvc.RegisterTemplate(mailer.TemplateDefault{
-			ID:          NewUserCredentialsTemplateID,
-			Subject:     "Your account has been created",
-			BodyText:    "Hello {{.Username}},\n\nYour temporary password is: {{.TemporaryPassword}}\n\nLog in at {{.LoginURL}}.",
-			Description: "Variables: Username, TemporaryPassword, LoginURL",
-		})
-		if err != nil {
-			return err
-		}
-		m.servicesManager.GetUsersService().SetMailer(mailerTemplateAdapter{mailerSvc}, "")
-
-		err = mailerSvc.RegisterTemplate(mailer.TemplateDefault{
-			ID:          PasswordResetTemplateID,
-			Subject:     "Reset your password",
-			BodyText:    "Hello {{.Username}},\n\nA password reset was requested for your account. If this was you, reset it here: {{.ResetURL}}\n\nIf you didn't request this, you can safely ignore this email.",
-			Description: "Variables: Username, ResetURL",
-		})
-		if err != nil {
-			return err
-		}
-		m.servicesManager.GetAuthService().SetMailer(mailerTemplateAdapter{mailerSvc}, m.config.GetString("auth.passwordReset.baseUrl"))
+	mailerMod, ok := m.manager.GetModule("mailer").(*mailer.Module)
+	if !ok {
+		return nil
 	}
+
+	var err error
+
+	mailerSvc := mailerMod.GetService()
+
+	err = mailerSvc.RegisterTemplate(mailer.TemplateDefault{
+		ID:          NewUserCredentialsTemplateID,
+		Subject:     "Your account has been created",
+		BodyText:    "Hello {{.Username}},\n\nYour temporary password is: {{.TemporaryPassword}}\n\nLog in at {{.LoginURL}}.",
+		Description: "Variables: Username, TemporaryPassword, LoginURL",
+	})
+	if err != nil {
+		return err
+	}
+	m.servicesManager.GetUsersService().SetMailer(mailerTemplateAdapter{mailerSvc}, "")
+
+	err = mailerSvc.RegisterTemplate(mailer.TemplateDefault{
+		ID:          PasswordResetTemplateID,
+		Subject:     "Reset your password",
+		BodyText:    "Hello {{.Username}},\n\nA password reset was requested for your account. If this was you, reset it here: {{.ResetURL}}\n\nIf you didn't request this, you can safely ignore this email.",
+		Description: "Variables: Username, ResetURL",
+	})
+	if err != nil {
+		return err
+	}
+	m.servicesManager.GetAuthService().SetMailer(mailerTemplateAdapter{mailerSvc}, m.config.GetString("auth.passwordReset.baseUrl"))
 
 	return nil
 }
@@ -167,8 +180,8 @@ type mailerTemplateAdapter struct {
 	svc *mailer.Service
 }
 
-func (a mailerTemplateAdapter) EnqueueTemplate(templateID string, to, cc, bcc []string, data any) error {
-	_, err := a.svc.EnqueueTemplate(templateID, to, cc, bcc, data)
+func (a mailerTemplateAdapter) SendTemplate(templateID string, to, cc, bcc []string, data any) error {
+	_, err := a.svc.SendTemplate(templateID, to, cc, bcc, data)
 	return err
 }
 

@@ -18,7 +18,7 @@ import (
 
 // testEncryption is shared by every test in this file — encryption is an
 // internal storage-layer detail, so unless a test specifically exercises
-// it (see TestEnqueue_EncryptsBodyAtRest / TestGetEmail_WrongKeyFailsToDecrypt),
+// it (see TestSend_EncryptsBodyAtRest / TestGetEmail_WrongKeyFailsToDecrypt),
 // this being a fixed, known manager is not itself load-bearing.
 func testEncryption() *encryption.Manager {
 	return encryption.NewManager("test-encryption-secret")
@@ -86,17 +86,22 @@ func testRetryConfigFast() RetryConfig {
 	}
 }
 
+// testDirectSendTimeoutFast bounds Send's background direct-delivery
+// attempt (see service.go's tryDeliverDirect) so a test with a hanging fake
+// sender fails fast rather than hanging the suite.
+const testDirectSendTimeoutFast = 2 * time.Second
+
 func newTestServiceWithSender(t *testing.T, db *gorm.DB, sender Sender) *Service {
 	t.Helper()
-	return NewService(db, sender, testRetryConfigFast(), 20, time.Minute, testEncryption())
+	return NewService(db, sender, testRetryConfigFast(), 20, time.Minute, testEncryption(), testDirectSendTimeoutFast)
 }
 
-func TestEnqueue_PersistsCorrectly(t *testing.T) {
+func TestSend_PersistsCorrectly(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
 
 	html := "<p>hi</p>"
-	email, err := svc.Enqueue(&EnqueueRequest{
+	email, err := svc.Send(&SendRequest{
 		To:       []string{"a@example.com"},
 		Cc:       []string{"b@example.com"},
 		Bcc:      []string{"c@example.com"},
@@ -105,7 +110,7 @@ func TestEnqueue_PersistsCorrectly(t *testing.T) {
 		BodyHTML: &html,
 	})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("Send: %v", err)
 	}
 	if email.Status != EmailStatusQueued {
 		t.Errorf("expected status queued, got %v", email.Status)
@@ -129,30 +134,30 @@ func TestEnqueue_PersistsCorrectly(t *testing.T) {
 	}
 }
 
-// TestEnqueue_EncryptsBodyAtRest is the actual proof that body encryption
+// TestSend_EncryptsBodyAtRest is the actual proof that body encryption
 // isn't a no-op: it reads the raw DB row directly, bypassing
 // Service.GetEmail's decryption entirely, and checks the stored value.
-func TestEnqueue_EncryptsBodyAtRest(t *testing.T) {
+func TestSend_EncryptsBodyAtRest(t *testing.T) {
 	db := testDB(t)
 	enc := testEncryption()
-	svc := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, enc)
+	svc := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, enc, testDirectSendTimeoutFast)
 
 	plainText := "your temporary password is: correct-horse-battery-staple"
 	html := "<p>your temporary password is: correct-horse-battery-staple</p>"
-	email, err := svc.Enqueue(&EnqueueRequest{
+	email, err := svc.Send(&SendRequest{
 		To:       []string{"a@example.com"},
 		Subject:  "Hello",
 		BodyText: plainText,
 		BodyHTML: &html,
 	})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("Send: %v", err)
 	}
 
-	// The value returned directly from Enqueue must already be plaintext —
+	// The value returned directly from Send must already be plaintext —
 	// Service's public API is plaintext in, plaintext out.
 	if email.BodyText != plainText {
-		t.Errorf("expected Enqueue's own return value to be plaintext, got: %q", email.BodyText)
+		t.Errorf("expected Send's own return value to be plaintext, got: %q", email.BodyText)
 	}
 
 	var raw Email
@@ -188,14 +193,14 @@ func TestEnqueue_EncryptsBodyAtRest(t *testing.T) {
 // or crash.
 func TestGetEmail_WrongKeyFailsToDecrypt(t *testing.T) {
 	db := testDB(t)
-	writer := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-a"))
+	writer := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-a"), testDirectSendTimeoutFast)
 
-	email, err := writer.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "sensitive content"})
+	email, err := writer.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "sensitive content"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("Send: %v", err)
 	}
 
-	reader := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-b"))
+	reader := NewService(db, &fakeSender{}, testRetryConfigFast(), 20, time.Minute, encryption.NewManager("secret-b"), testDirectSendTimeoutFast)
 
 	if _, err := reader.GetEmail(email.ID.String()); err == nil {
 		t.Fatal("expected GetEmail to fail to decrypt a row written under a different encryption secret")
@@ -209,9 +214,12 @@ func TestClaimBatch_ConcurrentClaimersGetDisjointSets(t *testing.T) {
 	const numEmails = 20
 	want := make(map[string]bool, numEmails)
 	for i := 0; i < numEmails; i++ {
-		email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+		// EnqueueTx (not Send) so this fixture setup doesn't race the new
+		// direct-send goroutine — this test is specifically about claimBatch,
+		// not enqueue-time delivery.
+		email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 		if err != nil {
-			t.Fatalf("Enqueue: %v", err)
+			t.Fatalf("EnqueueTx: %v", err)
 		}
 		want[email.ID.String()] = true
 	}
@@ -222,8 +230,8 @@ func TestClaimBatch_ConcurrentClaimersGetDisjointSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open second connection: %v", err)
 	}
-	svc1 := NewService(db, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption())
-	svc2 := NewService(db2, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption())
+	svc1 := NewService(db, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption(), testDirectSendTimeoutFast)
+	svc2 := NewService(db2, &fakeSender{}, testRetryConfigFast(), numEmails, time.Minute, testEncryption(), testDirectSendTimeoutFast)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -262,9 +270,11 @@ func TestClaimBatch_AbandonedClaimIsReclaimable(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
 
-	email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so this fixture setup doesn't race the new
+	// direct-send goroutine before the test simulates a stale claim below.
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 
 	// Simulate a stale claim from a replica that crashed mid-send: status
@@ -291,9 +301,11 @@ func TestRetryEmail_StaleSendingSucceeds_LiveSendingFails(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
 
-	stale, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so these fixtures don't race the new
+	// direct-send goroutine before the test manually claims/checks them.
+	stale, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 	past := time.Now().Add(-time.Hour)
 	if err := db.Model(&Email{}).Where("id = ?", stale.ID).Updates(map[string]interface{}{
@@ -306,9 +318,9 @@ func TestRetryEmail_StaleSendingSucceeds_LiveSendingFails(t *testing.T) {
 		t.Errorf("expected retrying a stale sending email to succeed, got: %v", err)
 	}
 
-	live, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	live, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 	future := time.Now().Add(time.Hour)
 	if err := db.Model(&Email{}).Where("id = ?", live.ID).Updates(map[string]interface{}{
@@ -340,18 +352,20 @@ func TestCancelEmail_QueuedSucceeds_SentFails(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
 
-	email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so this fixture setup doesn't race the new
+	// direct-send goroutine before CancelEmail runs below.
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 
 	if _, err := svc.CancelEmail(email.ID.String()); err != nil {
 		t.Errorf("expected cancelling a queued email to succeed, got: %v", err)
 	}
 
-	sent, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	sent, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 	if err := db.Model(&Email{}).Where("id = ?", sent.ID).Update("status", EmailStatusSent).Error; err != nil {
 		t.Fatalf("failed to mark email sent: %v", err)
@@ -368,9 +382,12 @@ func TestProcessBatch_SuccessPath(t *testing.T) {
 	sender := &fakeSender{}
 	svc := newTestServiceWithSender(t, db, sender)
 
-	email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so ProcessBatch below is the only thing that
+	// ever claims/sends this row — this test is about ProcessBatch, not the
+	// new direct-send fast path.
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 
 	if err := svc.ProcessBatch(context.Background()); err != nil {
@@ -397,9 +414,12 @@ func TestProcessBatch_FailureReschedules(t *testing.T) {
 	sender := &fakeSender{err: errors.New("smtp: connection refused")}
 	svc := newTestServiceWithSender(t, db, sender)
 
-	email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so ProcessBatch below is the only thing that
+	// ever claims/sends this row — this test is about ProcessBatch, not the
+	// new direct-send fast path.
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 
 	if err := svc.ProcessBatch(context.Background()); err != nil {
@@ -429,9 +449,12 @@ func TestProcessBatch_GivesUpPastMaxAge(t *testing.T) {
 	sender := &fakeSender{err: errors.New("smtp: connection refused")}
 	svc := newTestServiceWithSender(t, db, sender)
 
-	email, err := svc.Enqueue(&EnqueueRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	// EnqueueTx (not Send) so ProcessBatch below is the only thing that
+	// ever claims/sends this row — this test is about ProcessBatch, not the
+	// new direct-send fast path.
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("EnqueueTx: %v", err)
 	}
 
 	longAgo := time.Now().Add(-2 * time.Hour) // testRetryConfigFast's MaxAge is 1 hour
@@ -455,7 +478,7 @@ func TestProcessBatch_GivesUpPastMaxAge(t *testing.T) {
 	}
 }
 
-func TestEnqueueTemplate_EndToEnd(t *testing.T) {
+func TestSendTemplate_EndToEnd(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})
 
@@ -468,11 +491,11 @@ func TestEnqueueTemplate_EndToEnd(t *testing.T) {
 		t.Fatalf("RegisterTemplate: %v", err)
 	}
 
-	email, err := svc.EnqueueTemplate("test.welcome", []string{"a@example.com"}, nil, nil, map[string]any{
+	email, err := svc.SendTemplate("test.welcome", []string{"a@example.com"}, nil, nil, map[string]any{
 		"Name": "Alice", "Code": "123456",
 	})
 	if err != nil {
-		t.Fatalf("EnqueueTemplate: %v", err)
+		t.Fatalf("SendTemplate: %v", err)
 	}
 	if email.Subject != "Welcome Alice" {
 		t.Errorf("subject not rendered: %q", email.Subject)
@@ -481,15 +504,15 @@ func TestEnqueueTemplate_EndToEnd(t *testing.T) {
 		t.Errorf("bodyText not rendered: %q", email.BodyText)
 	}
 
-	// Overriding the template changes what a subsequent EnqueueTemplate call
+	// Overriding the template changes what a subsequent SendTemplate call
 	// renders, without affecting the email already enqueued above.
 	if _, err := svc.UpdateTemplate("test.welcome", "New subject {{.Name}}", "New body {{.Name}}", nil); err != nil {
 		t.Fatalf("UpdateTemplate: %v", err)
 	}
 
-	email2, err := svc.EnqueueTemplate("test.welcome", []string{"a@example.com"}, nil, nil, map[string]any{"Name": "Bob"})
+	email2, err := svc.SendTemplate("test.welcome", []string{"a@example.com"}, nil, nil, map[string]any{"Name": "Bob"})
 	if err != nil {
-		t.Fatalf("EnqueueTemplate (after override): %v", err)
+		t.Fatalf("SendTemplate (after override): %v", err)
 	}
 	if email2.Subject != "New subject Bob" {
 		t.Errorf("expected the override to be used, got subject: %q", email2.Subject)
@@ -549,5 +572,106 @@ func TestUpdateTemplate_UnknownID_ReturnsNotFound(t *testing.T) {
 	_, err := svc.UpdateTemplate("nonexistent.template", "s", "b", nil)
 	if !errors.Is(err, ErrTemplateNotFound) {
 		t.Errorf("expected ErrTemplateNotFound, got: %v", err)
+	}
+}
+
+// waitForEmailStatus polls GetEmail until pred(email) is true or deadline
+// elapses, for asserting on Send's asynchronous direct-send goroutine
+// (see service.go's tryDeliverDirect) without a synchronization hook into
+// production code.
+func waitForEmailStatus(t *testing.T, svc *Service, id string, pred func(*Email) bool) *Email {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := svc.GetEmail(id)
+		if err != nil {
+			t.Fatalf("GetEmail: %v", err)
+		}
+		if got != nil && pred(got) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for email %s to reach the expected state; last seen: %+v", id, got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestSend_DeliversDirectly proves Send attempts delivery immediately
+// in the background, without ever calling ProcessBatch.
+func TestSend_DeliversDirectly(t *testing.T) {
+	db := testDB(t)
+	sender := &fakeSender{}
+	svc := newTestServiceWithSender(t, db, sender)
+
+	email, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	got := waitForEmailStatus(t, svc, email.ID.String(), func(e *Email) bool {
+		return e.Status == EmailStatusSent
+	})
+	if got.SentAt == nil {
+		t.Error("expected SentAt to be set")
+	}
+	if sender.callCount() != 1 {
+		t.Errorf("expected exactly 1 send attempt, got %d", sender.callCount())
+	}
+}
+
+// TestSend_DirectSendFailureFallsBackToQueue proves a failed direct-send
+// attempt falls back through the exact same finalizeFailure/backoff path a
+// failed tick attempt would, leaving the row queued for the next tick
+// rather than stuck or lost.
+func TestSend_DirectSendFailureFallsBackToQueue(t *testing.T) {
+	db := testDB(t)
+	sender := &fakeSender{err: errors.New("smtp: connection refused")}
+	svc := newTestServiceWithSender(t, db, sender)
+
+	email, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// claimByID increments Attempts at claim time, while status is still
+	// "sending" — wait for finalizeFailure to actually complete and put the
+	// row back to "queued" with NextAttemptAt rescheduled, not just for
+	// Attempts to tick up mid-flight.
+	got := waitForEmailStatus(t, svc, email.ID.String(), func(e *Email) bool {
+		return e.Status == EmailStatusQueued && e.Attempts >= 1
+	})
+	if got.LastError == nil || *got.LastError != sender.err.Error() {
+		t.Errorf("expected LastError to be recorded, got %v", got.LastError)
+	}
+	if !got.NextAttemptAt.After(time.Now()) {
+		t.Error("expected NextAttemptAt to be rescheduled into the future")
+	}
+}
+
+// TestClaimByID_AlreadyClaimedRow_IsNoOp is the concrete proof that a
+// direct-send attempt racing the periodic tick can never double-claim: once
+// a row is no longer in EmailStatusQueued, claimByID must return (nil, nil)
+// rather than claiming it again.
+func TestClaimByID_AlreadyClaimedRow_IsNoOp(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("EnqueueTx: %v", err)
+	}
+
+	// Simulate the periodic tick's claimBatch having claimed this row first.
+	if err := db.Model(&Email{}).Where("id = ?", email.ID).Update("status", EmailStatusSending).Error; err != nil {
+		t.Fatalf("failed to simulate a live claim: %v", err)
+	}
+
+	claimed, err := svc.claimByID(email.ID.String())
+	if err != nil {
+		t.Fatalf("claimByID: %v", err)
+	}
+	if claimed != nil {
+		t.Errorf("expected claimByID to be a no-op on an already-claimed row, got: %+v", claimed)
 	}
 }
