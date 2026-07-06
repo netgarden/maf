@@ -379,6 +379,52 @@ func (s *Service) finalizeFailure(email Email, sendErr error) {
 	}
 }
 
+// RetentionConfig controls how long terminal-status emails are kept before
+// PurgeOldEmails deletes them. Sent/cancelled rows are routine noise and
+// can be pruned aggressively; failed (gave-up) rows are usually worth
+// investigating, so they default to a much longer window.
+type RetentionConfig struct {
+	MaxAge       time.Duration // sent, cancelled
+	FailedMaxAge time.Duration // failed (gave up)
+}
+
+// PurgeOldEmails deletes terminal-status rows (sent/cancelled/failed) past
+// their retention window, using each status's own dedicated timestamp
+// (SentAt/CancelledAt/GaveUpAt) rather than UpdatedAt. queued/sending rows
+// are never touched no matter their age — only claimBatch/claimByID ever
+// transition those. Returns the total number of rows deleted.
+//
+// A retention delete can in principle race an admin's RetryEmail/CancelEmail
+// call on the same row (e.g. retrying a failed email right as it ages past
+// FailedMaxAge): whichever commits first wins, same as every other
+// conditional state transition in this file — the loser either finds
+// nothing to retry (ErrNotFound) or the row survives as freshly "queued"
+// and the delete's WHERE simply no longer matches it. No special handling
+// needed.
+func (s *Service) PurgeOldEmails(cfg RetentionConfig) (int64, error) {
+	var total int64
+
+	result := s.db.Where("status = ? AND sent_at < ?", EmailStatusSent, time.Now().Add(-cfg.MaxAge)).Delete(&Email{})
+	if result.Error != nil {
+		return total, fmt.Errorf("mailer: purge sent emails: %w", result.Error)
+	}
+	total += result.RowsAffected
+
+	result = s.db.Where("status = ? AND cancelled_at < ?", EmailStatusCancelled, time.Now().Add(-cfg.MaxAge)).Delete(&Email{})
+	if result.Error != nil {
+		return total, fmt.Errorf("mailer: purge cancelled emails: %w", result.Error)
+	}
+	total += result.RowsAffected
+
+	result = s.db.Where("status = ? AND gave_up_at < ?", EmailStatusFailed, time.Now().Add(-cfg.FailedMaxAge)).Delete(&Email{})
+	if result.Error != nil {
+		return total, fmt.Errorf("mailer: purge failed emails: %w", result.Error)
+	}
+	total += result.RowsAffected
+
+	return total, nil
+}
+
 // ListEmailsFilter is the admin API's list/filter/pagination request.
 type ListEmailsFilter struct {
 	Status   string

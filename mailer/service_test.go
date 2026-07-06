@@ -675,3 +675,135 @@ func TestClaimByID_AlreadyClaimedRow_IsNoOp(t *testing.T) {
 		t.Errorf("expected claimByID to be a no-op on an already-claimed row, got: %+v", claimed)
 	}
 }
+
+// makeTerminalEmail enqueues (via EnqueueTx, so it never races the
+// direct-send goroutine) and then stamps it directly into a terminal
+// status with the given timestamp, simulating an email that reached that
+// state a while ago.
+func makeTerminalEmail(t *testing.T, db *gorm.DB, svc *Service, status EmailStatus, timestampColumn string, at time.Time) *Email {
+	t.Helper()
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("EnqueueTx: %v", err)
+	}
+	err = db.Model(&Email{}).Where("id = ?", email.ID).Updates(map[string]interface{}{
+		"status":        status,
+		timestampColumn: &at,
+	}).Error
+	if err != nil {
+		t.Fatalf("failed to stamp terminal email: %v", err)
+	}
+	return email
+}
+
+func TestPurgeOldEmails_DeletesOldSentAndCancelled_KeepsRecent(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	cfg := RetentionConfig{MaxAge: time.Hour, FailedMaxAge: 48 * time.Hour}
+	now := time.Now()
+
+	oldSent := makeTerminalEmail(t, db, svc, EmailStatusSent, "sent_at", now.Add(-2*time.Hour))
+	oldCancelled := makeTerminalEmail(t, db, svc, EmailStatusCancelled, "cancelled_at", now.Add(-2*time.Hour))
+	recentSent := makeTerminalEmail(t, db, svc, EmailStatusSent, "sent_at", now.Add(-10*time.Minute))
+
+	deleted, err := svc.PurgeOldEmails(cfg)
+	if err != nil {
+		t.Fatalf("PurgeOldEmails: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("expected 2 rows deleted, got %d", deleted)
+	}
+
+	for _, id := range []string{oldSent.ID.String(), oldCancelled.ID.String()} {
+		got, err := svc.GetEmail(id)
+		if err != nil {
+			t.Fatalf("GetEmail(%s): %v", id, err)
+		}
+		if got != nil {
+			t.Errorf("expected %s to have been purged, still found: %+v", id, got)
+		}
+	}
+
+	got, err := svc.GetEmail(recentSent.ID.String())
+	if err != nil {
+		t.Fatalf("GetEmail(recentSent): %v", err)
+	}
+	if got == nil {
+		t.Error("expected the recent sent email to survive purging")
+	}
+}
+
+func TestPurgeOldEmails_FailedUsesLongerWindow(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	cfg := RetentionConfig{MaxAge: time.Hour, FailedMaxAge: 48 * time.Hour}
+	now := time.Now()
+
+	// Older than MaxAge but younger than FailedMaxAge — must survive, since
+	// failed emails get the longer window.
+	withinFailedWindow := makeTerminalEmail(t, db, svc, EmailStatusFailed, "gave_up_at", now.Add(-2*time.Hour))
+	// Older than FailedMaxAge — must be purged.
+	pastFailedWindow := makeTerminalEmail(t, db, svc, EmailStatusFailed, "gave_up_at", now.Add(-72*time.Hour))
+
+	deleted, err := svc.PurgeOldEmails(cfg)
+	if err != nil {
+		t.Fatalf("PurgeOldEmails: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 row deleted, got %d", deleted)
+	}
+
+	got, err := svc.GetEmail(withinFailedWindow.ID.String())
+	if err != nil {
+		t.Fatalf("GetEmail(withinFailedWindow): %v", err)
+	}
+	if got == nil {
+		t.Error("expected the failed email within FailedMaxAge to survive purging")
+	}
+
+	got, err = svc.GetEmail(pastFailedWindow.ID.String())
+	if err != nil {
+		t.Fatalf("GetEmail(pastFailedWindow): %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected the failed email past FailedMaxAge to have been purged, still found: %+v", got)
+	}
+}
+
+func TestPurgeOldEmails_NeverTouchesQueuedOrSending(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, &fakeSender{})
+
+	// A retention window so short it would delete anything terminal — proving
+	// queued/sending survive isn't just because the window was too lenient.
+	cfg := RetentionConfig{MaxAge: time.Nanosecond, FailedMaxAge: time.Nanosecond}
+
+	queued, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("EnqueueTx: %v", err)
+	}
+
+	sending, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("EnqueueTx: %v", err)
+	}
+	if err := db.Model(&Email{}).Where("id = ?", sending.ID).Update("status", EmailStatusSending).Error; err != nil {
+		t.Fatalf("failed to simulate a live claim: %v", err)
+	}
+
+	if _, err := svc.PurgeOldEmails(cfg); err != nil {
+		t.Fatalf("PurgeOldEmails: %v", err)
+	}
+
+	for _, id := range []string{queued.ID.String(), sending.ID.String()} {
+		got, err := svc.GetEmail(id)
+		if err != nil {
+			t.Fatalf("GetEmail(%s): %v", id, err)
+		}
+		if got == nil {
+			t.Errorf("expected %s to survive purging regardless of retention window", id)
+		}
+	}
+}

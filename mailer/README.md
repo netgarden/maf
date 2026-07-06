@@ -141,6 +141,31 @@ the past, the row is claimable again by the next tick — the same
 lease-expiry model `jobs` itself uses for its own per-job lock, just
 applied per email row instead of per job.
 
+## Retention: cleaning up old emails
+
+`mailer_queue` rows are never deleted by the send/retry machinery above —
+only their `status` changes. Left alone, every email ever sent would stay
+in the table forever. A second recurring job (`mailer-retention`,
+registered in `Module.Initialize()` exactly like `mailer-tick`, coordinated
+across replicas the same way) deletes old rows via `Service.PurgeOldEmails`
+— but only **terminal-status** ones (`sent`, `cancelled`, `failed`);
+`queued`/`sending` rows are never touched regardless of age, since those
+are still active.
+
+`sent`/`cancelled` rows are routine noise and get a short default window
+(`mailer.retention.maxAge`, 30 days); `failed` (gave-up) rows are usually
+worth investigating before they disappear, so they get a much longer one
+(`mailer.retention.failedMaxAge`, 180 days) — two separate knobs, not one.
+Each status is matched against its own dedicated timestamp column
+(`sent_at`/`cancelled_at`/`gave_up_at`), not a generic "last updated" one.
+
+This can, in principle, race an admin's retry/cancel call on the same row
+(e.g. retrying a `failed` email right as it crosses `failedMaxAge`) — same
+as every other conditional state transition in this file, whichever
+commits first wins: the loser either finds nothing to retry (`ErrNotFound`)
+or the row survives as freshly `queued` and the purge's `WHERE` simply no
+longer matches it. No special handling needed.
+
 ## Configuration
 
 | Key | Type | Default | Notes |
@@ -160,6 +185,10 @@ applied per email row instead of per job.
 | `mailer.queue.claimTimeout` | duration | `2m` | claim lease / jobs lock lease |
 | `mailer.queue.tickInterval` | duration | `15s` | how often the queue is checked |
 | `mailer.queue.directSendTimeout` | duration | `10s` | how long `Send`'s direct-delivery attempt may run before being abandoned (the row is simply left queued for the next tick) |
+| `mailer.retention.maxAge` | duration | `720h` (30 days) | how long `sent`/`cancelled` emails are kept before being purged |
+| `mailer.retention.failedMaxAge` | duration | `4320h` (180 days) | how long `failed` (gave-up) emails are kept before being purged |
+| `mailer.retention.tickInterval` | duration | `24h` | how often the retention purge runs |
+| `mailer.retention.jobTimeout` | duration | `10m` | lock lease for one retention run (a `jobs` scheduling concept, unrelated to `queue.claimTimeout`) |
 
 `smtp.encryption` is validated at startup (`Initialize()`), not at first
 send — an unknown value fails the application to start rather than failing

@@ -73,6 +73,15 @@ func (m *Module) GetConfigSchema() []maf.ConfigItem {
 		// queue tick remains that; an abandoned attempt just leaves the row
 		// queued for the next tick).
 		{Name: "mailer.queue.directSendTimeout", Type: maf.Duration, DefaultValue: 10 * time.Second},
+
+		// How long terminal-status rows are kept before the retention job
+		// (see handler.go's NewRetentionHandler) deletes them. sent/cancelled
+		// are routine noise and get a short window; failed (gave-up) rows are
+		// usually worth investigating, so they get a much longer one.
+		{Name: "mailer.retention.maxAge", Type: maf.Duration, DefaultValue: 30 * 24 * time.Hour},
+		{Name: "mailer.retention.failedMaxAge", Type: maf.Duration, DefaultValue: 180 * 24 * time.Hour},
+		{Name: "mailer.retention.tickInterval", Type: maf.Duration, DefaultValue: 24 * time.Hour},
+		{Name: "mailer.retention.jobTimeout", Type: maf.Duration, DefaultValue: 10 * time.Minute},
 	}
 }
 
@@ -128,6 +137,18 @@ func (m *Module) Initialize() error {
 	tickSeconds := int64(cfg.GetDuration("queue.tickInterval").Seconds())
 	claimSeconds := int64(claimTimeout.Seconds())
 	if _, err := jobsModule.GetService().AddJob("mailer-tick", "", "Send queued emails", tickSeconds, claimSeconds); err != nil {
+		return err
+	}
+
+	retentionCfg := RetentionConfig{
+		MaxAge:       cfg.GetDuration("retention.maxAge"),
+		FailedMaxAge: cfg.GetDuration("retention.failedMaxAge"),
+	}
+	jobsModule.GetService().RegisterHandler("mailer-retention", NewRetentionHandler(m.service, retentionCfg))
+
+	retentionTickSeconds := int64(cfg.GetDuration("retention.tickInterval").Seconds())
+	retentionJobTimeoutSeconds := int64(cfg.GetDuration("retention.jobTimeout").Seconds())
+	if _, err := jobsModule.GetService().AddJob("mailer-retention", "", "Purge old sent/cancelled/failed emails", retentionTickSeconds, retentionJobTimeoutSeconds); err != nil {
 		return err
 	}
 
