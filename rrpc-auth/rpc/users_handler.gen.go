@@ -22,7 +22,7 @@ func newUsersServiceHandler(service UsersService) *UsersServiceHandler {
 		{
 			Path:        rrpc.ParsePath(""),
 			Type:        "GET",
-			ContentType: "",
+			ContentType: "application/json",
 			HandlerFunc: serviceHandler.handleList,
 		},
 		{
@@ -71,8 +71,12 @@ func (h *UsersServiceHandler) Methods() []rrpc.MethodHolder {
 
 func (h *UsersServiceHandler) handleList(ctx *rrpc.Context) error {
 
+	reqPayload := &DatatableRequest{}
+	if err := rrpc.DecodeQueryParams(ctx.Request().URL.Query(), reqPayload); err != nil {
+		return rrpc.ErrRrpcBadRequest.WithCausef("failed to decode query params: %w", err)
+	}
 	// Call service method implementation.
-	ret0, err1 := h.service.List(ctx)
+	ret0, err1 := h.service.List(ctx, reqPayload)
 	if err1 != nil {
 		rpcErr, ok := err1.(rrpc.RRPCError)
 		if !ok {
@@ -193,12 +197,16 @@ type UsersServiceClientHandler struct {
 	client *Client
 }
 
-func (h *UsersServiceClientHandler) List(ctx context.Context) (*ListUsersResponse, error) {
+func (h *UsersServiceClientHandler) List(ctx context.Context, data *DatatableRequest) (*ListUsersResponse, error) {
 
 	methodType := "GET"
 	url := h.client.url + "/" + h.path
 
-	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
+	jsonBody, err := json.Marshal(data)
+	if err != nil {
+		return nil, rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
+	}
+	r, err := h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}

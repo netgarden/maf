@@ -15,6 +15,7 @@ import (
 
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
 
@@ -368,5 +369,79 @@ func TestCreateUser_SendCredentialsEmail_SendErrorDoesNotFailCreate(t *testing.T
 	}
 	if found == nil {
 		t.Error("expected the user to be persisted despite the send error")
+	}
+}
+
+// --- ListUsersPage ---
+
+func TestListUsersPage_DefaultOrderIsByUsername(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	mustCreateUser(t, svc, "bob", "bob@example.com")
+	mustCreateUser(t, svc, "alice", "alice@example.com")
+
+	result, err := svc.ListUsersPage(datatables.Query{})
+	if err != nil {
+		t.Fatalf("ListUsersPage: %v", err)
+	}
+	if len(result.Items) != 2 || result.Items[0].Username != "alice" || result.Items[1].Username != "bob" {
+		t.Errorf("expected default order by username [alice, bob], got %+v", result.Items)
+	}
+}
+
+func TestListUsersPage_FiltersByUsernameContains(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	mustCreateUser(t, svc, "web-admin", "web-admin@example.com")
+	mustCreateUser(t, svc, "db-admin", "db-admin@example.com")
+
+	result, err := svc.ListUsersPage(datatables.Query{Filters: map[string]string{"username": "web"}})
+	if err != nil {
+		t.Fatalf("ListUsersPage: %v", err)
+	}
+	if result.TotalCount != 1 || len(result.Items) != 1 || result.Items[0].Username != "web-admin" {
+		t.Errorf("expected only web-admin to match, got count=%d items=%+v", result.TotalCount, result.Items)
+	}
+}
+
+func TestListUsersPage_SortByEmailDescOverridesDefault(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	mustCreateUser(t, svc, "a", "zzz@example.com")
+	mustCreateUser(t, svc, "b", "aaa@example.com")
+
+	result, err := svc.ListUsersPage(datatables.Query{SortBy: "email", SortDir: datatables.Desc})
+	if err != nil {
+		t.Fatalf("ListUsersPage: %v", err)
+	}
+	if len(result.Items) != 2 || result.Items[0].Email != "zzz@example.com" || result.Items[1].Email != "aaa@example.com" {
+		t.Errorf("expected email desc order, got %+v", result.Items)
+	}
+}
+
+func TestListUsersPage_RejectsUnknownFilterColumn(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	_, err := svc.ListUsersPage(datatables.Query{Filters: map[string]string{"does_not_exist": "x"}})
+	if !errors.Is(err, datatables.ErrUnknownFilterColumn) {
+		t.Errorf("expected ErrUnknownFilterColumn, got %v", err)
+	}
+
+	// admin/active are sortable but not filterable (no FilterOperator) —
+	// see userColumns' comment on why a boolean filter isn't offered.
+	_, err = svc.ListUsersPage(datatables.Query{Filters: map[string]string{"admin": "true"}})
+	if !errors.Is(err, datatables.ErrUnknownFilterColumn) {
+		t.Errorf("expected ErrUnknownFilterColumn for non-filterable column, got %v", err)
+	}
+}
+
+func mustCreateUser(t *testing.T, svc *UsersService, username, email string) {
+	t.Helper()
+	if _, err := svc.CreateUser(&dto.UserCreateDTO{Username: username, Password: "s3cr3t", Email: email}); err != nil {
+		t.Fatalf("CreateUser(%s): %v", username, err)
 	}
 }

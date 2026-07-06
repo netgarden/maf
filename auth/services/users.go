@@ -6,6 +6,7 @@ import (
 
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
 	"gorm.io/gorm"
@@ -131,12 +132,32 @@ func (s *UsersService) UpdatePassword(id, passwordHash string) error {
 	return s.db.Model(&entities.User{}).Where("id = ?", id).Update("password", passwordHash).Error
 }
 
-func (s *UsersService) ListUsers() ([]*entities.User, error) {
-	var users []*entities.User
-	if err := s.db.Order("username").Find(&users).Error; err != nil {
-		return nil, err
+// userColumns declares User's queryable fields for ListUsersPage: which
+// are sortable, and — if filterable — the single operator applied
+// whenever a request's Filters has a value for it (see datatables.Column).
+// admin/active are sortable only, not filterable — a boolean column has
+// no clean "not applied" value to distinguish from a real false/true
+// (rrpc has no optional-field support to fall back on either — see
+// citadel's HostGroups plan notes on the same constraint).
+var userColumns = []datatables.Column{
+	{Name: "username", DBColumn: "username", Sortable: true, FilterOperator: datatables.Contains},
+	{Name: "email", DBColumn: "email", Sortable: true, FilterOperator: datatables.Contains},
+	{Name: "firstName", DBColumn: "first_name", Sortable: true, FilterOperator: datatables.Contains},
+	{Name: "lastName", DBColumn: "last_name", Sortable: true, FilterOperator: datatables.Contains},
+	{Name: "admin", DBColumn: "admin", Sortable: true},
+	{Name: "active", DBColumn: "active", Sortable: true},
+}
+
+// ListUsersPage returns a filtered, sorted, paginated page of users per q.
+// When q.SortBy is unset, users are ordered by username by default —
+// datatables.Apply itself only adds an ORDER BY when a sort is actually
+// requested, so the default lives here on the base query instead.
+func (s *UsersService) ListUsersPage(q datatables.Query) (*datatables.Result[*entities.User], error) {
+	db := s.db.Model(&entities.User{})
+	if q.SortBy == "" {
+		db = db.Order("username")
 	}
-	return users, nil
+	return datatables.Apply[*entities.User](db, userColumns, q)
 }
 
 func (s *UsersService) UpdateUser(id string, data *dto.UserUpdateDTO) (*entities.User, error) {

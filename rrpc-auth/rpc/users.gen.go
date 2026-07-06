@@ -17,7 +17,8 @@ type CreateUserRequest struct {
 }
 
 type ListUsersResponse struct {
-	Users []UserItem `json:"users"`
+	Users    []UserItem        `json:"users"`
+	PageInfo DatatablePageInfo `json:"pageInfo"`
 }
 
 type UpdateUserRequest struct {
@@ -42,7 +43,7 @@ type UserItem struct {
 // -- Services --------------------------------------------
 
 type UsersService interface {
-	List(ctx *rrpc.Context) (*ListUsersResponse, error)
+	List(ctx *rrpc.Context, request *DatatableRequest) (*ListUsersResponse, error)
 	Create(ctx *rrpc.Context, request *CreateUserRequest) (*UserItem, error)
 	Update(ctx *rrpc.Context, request *UpdateUserRequest) error
 	Delete(ctx *rrpc.Context) error

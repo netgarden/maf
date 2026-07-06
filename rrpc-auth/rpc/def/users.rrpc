@@ -1,3 +1,5 @@
+include "../../../datatables/def/datatable.rrpc"
+
 struct UserItem {
     id        string
     username  string
@@ -9,7 +11,8 @@ struct UserItem {
 }
 
 struct ListUsersResponse {
-    users []UserItem
+    users    []UserItem
+    pageInfo DatatablePageInfo
 }
 
 struct UpdateUserRequest {
@@ -47,7 +50,7 @@ error UserAlreadyExists {
 service Users {
     @method("GET")
     @Path("")
-    list() (ListUsersResponse)
+    list(request DatatableRequest) (ListUsersResponse)
     @Path("")
     create(request CreateUserRequest) (UserItem)
     @Path("{id:string}")

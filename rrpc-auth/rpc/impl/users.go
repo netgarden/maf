@@ -1,8 +1,11 @@
 package impl
 
 import (
+	"errors"
+
 	mafauthdto "github.com/netgarden/maf/auth/dto"
 	mafauth "github.com/netgarden/maf/auth/services"
+	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/rrpc-auth/rpc"
 	"github.com/netgarden/rrpc"
 )
@@ -15,14 +18,23 @@ type UsersServiceImpl struct {
 	users *mafauth.UsersService
 }
 
-func (s *UsersServiceImpl) List(ctx *rrpc.Context) (*rpc.ListUsersResponse, error) {
-	users, err := s.users.ListUsers()
+func (s *UsersServiceImpl) List(ctx *rrpc.Context, req *rpc.DatatableRequest) (*rpc.ListUsersResponse, error) {
+	result, err := s.users.ListUsersPage(datatables.Query{
+		Page:     req.Page,
+		PageSize: req.PageSize,
+		SortBy:   req.SortBy,
+		SortDir:  datatables.SortDir(req.SortDir),
+		Filters:  req.Filters,
+	})
 	if err != nil {
+		if errors.Is(err, datatables.ErrUnknownSortColumn) || errors.Is(err, datatables.ErrUnknownFilterColumn) {
+			return nil, rrpc.ErrRrpcBadRequest.WithCause(err)
+		}
 		return nil, rrpc.ErrRrpcInternalError.WithCause(err)
 	}
 
-	items := make([]rpc.UserItem, 0, len(users))
-	for _, u := range users {
+	items := make([]rpc.UserItem, 0, len(result.Items))
+	for _, u := range result.Items {
 		items = append(items, rpc.UserItem{
 			Id:        u.ID.String(),
 			Username:  u.Username,
@@ -34,7 +46,14 @@ func (s *UsersServiceImpl) List(ctx *rrpc.Context) (*rpc.ListUsersResponse, erro
 		})
 	}
 
-	return &rpc.ListUsersResponse{Users: items}, nil
+	return &rpc.ListUsersResponse{
+		Users: items,
+		PageInfo: rpc.DatatablePageInfo{
+			TotalCount: int(result.TotalCount),
+			Page:       req.Page,
+			PageSize:   req.PageSize,
+		},
+	}, nil
 }
 
 func (s *UsersServiceImpl) Create(ctx *rrpc.Context, req *rpc.CreateUserRequest) (*rpc.UserItem, error) {
