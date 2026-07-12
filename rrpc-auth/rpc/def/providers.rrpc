@@ -1,0 +1,53 @@
+include "../../../datatables/def/datatable.rrpc"
+
+struct ProviderItem {
+    id      string
+    type    string
+    slug    string
+    name    string
+    enabled bool
+}
+
+struct ListProvidersResponse {
+    providers []ProviderItem
+    pageInfo  DatatablePageInfo
+}
+
+struct SetProviderEnabledRequest {
+    enabled bool
+}
+
+struct PublicProviderSummary {
+    type string
+    slug string
+    name string
+}
+
+struct ListPublicProvidersResponse {
+    providers []PublicProviderSummary
+}
+
+error ProviderNotFound {
+    code = 10
+    http_code = 404
+    message = "provider not found"
+}
+
+@Path("api/admin/providers")
+service Providers {
+    @method("GET")
+    @Path("")
+    list(request DatatableRequest) (ListProvidersResponse)
+    @Path("{id:string}/enabled")
+    setEnabled(request SetProviderEnabledRequest)
+    @method("DELETE")
+    @Path("{id:string}")
+    delete()
+}
+
+@Path("api/auth/providers")
+service PublicProviders {
+    @method("GET")
+    @Path("")
+    list() (ListPublicProvidersResponse)
+}

@@ -20,6 +20,7 @@ func NewAuthService(
 	sessionsService sessionsRepository,
 	resetTokens passwordResetTokensRepository,
 	passwordsManager *passwords.Manager,
+	identities identitiesRepository,
 ) *AuthService {
 	return &AuthService{
 		config:           config,
@@ -28,6 +29,7 @@ func NewAuthService(
 		sessionsService:  sessionsService,
 		resetTokens:      resetTokens,
 		passwordsManager: passwordsManager,
+		identities:       identities,
 	}
 }
 
@@ -38,6 +40,7 @@ type AuthService struct {
 	sessionsService  sessionsRepository
 	resetTokens      passwordResetTokensRepository
 	passwordsManager *passwords.Manager
+	identities       identitiesRepository
 
 	mailer       TemplateMailer
 	resetBaseURL string
@@ -57,6 +60,10 @@ func (s *AuthService) SetMailer(mailer TemplateMailer, baseURL string) {
 // cookie. Returns ("", nil, nil) when credentials are invalid.
 // secure should be true when the request arrived over HTTPS.
 func (s *AuthService) Login(req *dto.CredentialsLoginRequest, clientIP, userAgent string, secure bool) (string, *http.Cookie, error) {
+	if !s.passwordLoginEnabled() {
+		return "", nil, nil
+	}
+
 	user, err := s.validateCredentials(req)
 	if err != nil {
 		return "", nil, err
@@ -248,6 +255,17 @@ func (s *AuthService) RefreshCookiePath() string {
 
 func (s *AuthService) ForceSecureCookie() bool {
 	return s.config.GetBool("auth.session.cookie.force_secure")
+}
+
+// passwordLoginEnabled gates Login on auth.password.enabled (default true
+// — see the module's GetConfigSchema — so an OIDC-only deployment can
+// disable it). ChangePassword/RequestPasswordReset/ConfirmPasswordReset
+// are deliberately not gated by this: an admin turning off the *login*
+// path shouldn't also strand a user mid password-reset flow they'd
+// already started, and ChangePassword requires an existing session to
+// call at all.
+func (s *AuthService) passwordLoginEnabled() bool {
+	return s.config.GetBool("auth.password.enabled")
 }
 
 func (s *AuthService) accessSecret() string { return s.secret + ":access" }

@@ -19,6 +19,7 @@ var (
 	_ usersRepository               = (*mockUsers)(nil)
 	_ sessionsRepository            = (*mockSessions)(nil)
 	_ passwordResetTokensRepository = (*mockPasswordResetTokens)(nil)
+	_ identitiesRepository          = (*mockIdentities)(nil)
 )
 
 // --- mocks ---
@@ -26,16 +27,31 @@ var (
 type mockUsers struct {
 	byUsername      map[string]*entities.User
 	byID            map[string]*entities.User
+	byEmail         map[string]*entities.User
 	err             error
 	updatedPassword string
 	updateErr       error
+
+	created   []*entities.User // every user CreateExternalUser has produced
+	createErr error
+
+	adminSetTo  map[string]bool // userID -> last value SetAdmin was called with
+	setAdminErr error
 }
 
 func (m *mockUsers) GetUser(id string) (*entities.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.byID[id], nil
+	if u, ok := m.byID[id]; ok {
+		return u, nil
+	}
+	for _, u := range m.created {
+		if u.ID.String() == id {
+			return u, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockUsers) GetUserByUsername(username string) (*entities.User, error) {
@@ -45,11 +61,45 @@ func (m *mockUsers) GetUserByUsername(username string) (*entities.User, error) {
 	return m.byUsername[username], nil
 }
 
+func (m *mockUsers) GetUserByEmail(email string) (*entities.User, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.byEmail[email], nil
+}
+
 func (m *mockUsers) UpdatePassword(id, passwordHash string) error {
 	if m.updateErr != nil {
 		return m.updateErr
 	}
 	m.updatedPassword = passwordHash
+	return nil
+}
+
+func (m *mockUsers) CreateExternalUser(email, firstName, lastName string) (*entities.User, error) {
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	user := &entities.User{
+		EntityBase: database.EntityBase{ID: uuid.NewV4()},
+		Username:   email,
+		Email:      email,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Active:     true,
+	}
+	m.created = append(m.created, user)
+	return user, nil
+}
+
+func (m *mockUsers) SetAdmin(id string, admin bool) error {
+	if m.setAdminErr != nil {
+		return m.setAdminErr
+	}
+	if m.adminSetTo == nil {
+		m.adminSetTo = make(map[string]bool)
+	}
+	m.adminSetTo[id] = admin
 	return nil
 }
 
@@ -161,19 +211,65 @@ func (m *mockPasswordResetTokens) DeleteUnusedForUser(userID uuid.UUID) error {
 	return nil
 }
 
+type mockIdentities struct {
+	// byKey maps "providerType|providerID|subject" -> *entities.UserIdentity.
+	byKey map[string]*entities.UserIdentity
+
+	findErr   error
+	createErr error
+}
+
+func identityKey(providerType string, providerID uuid.UUID, subject string) string {
+	return providerType + "|" + providerID.String() + "|" + subject
+}
+
+func (m *mockIdentities) FindByProviderSubject(providerType string, providerID uuid.UUID, subject string) (*entities.UserIdentity, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	return m.byKey[identityKey(providerType, providerID, subject)], nil
+}
+
+func (m *mockIdentities) Create(userID uuid.UUID, providerType string, providerID uuid.UUID, subject, email string) (*entities.UserIdentity, error) {
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	identity := &entities.UserIdentity{
+		EntityBase:   database.EntityBase{ID: uuid.NewV4()},
+		UserID:       userID,
+		ProviderType: providerType,
+		ProviderID:   providerID,
+		Subject:      subject,
+		Email:        email,
+	}
+	if m.byKey == nil {
+		m.byKey = make(map[string]*entities.UserIdentity)
+	}
+	m.byKey[identityKey(providerType, providerID, subject)] = identity
+	return identity, nil
+}
+
 // --- test helpers ---
 
 func newPM() *passwords.Manager { return passwords.NewManager() }
 
+// newCfg mirrors this codebase's real runtime defaults (see
+// auth.Module.GetConfigSchema) for every key AuthService reads — unlike
+// production, maf.NewConfig applies no schema defaults of its own (it's a
+// flat test-only map, see config.go), so any new AuthService-read key needs
+// an explicit entry here or every existing test silently inherits that
+// key's zero value instead of its real default.
 func newCfg() *maf.Config {
 	return maf.NewConfig(map[string]any{
-		"auth.token.ttl":                   15 * time.Minute,
-		"auth.session.ttl":                 7 * 24 * time.Hour,
-		"auth.session.cookie.name":         "session",
-		"auth.session.cookie.path":         "/auth/refresh",
-		"auth.session.cookie.force_secure": false,
-		"auth.passwordReset.tokenTTL":      time.Hour,
-		"auth.passwordReset.enabled":       true,
+		"auth.token.ttl":                    15 * time.Minute,
+		"auth.session.ttl":                  7 * 24 * time.Hour,
+		"auth.session.cookie.name":          "session",
+		"auth.session.cookie.path":          "/auth/refresh",
+		"auth.session.cookie.force_secure":  false,
+		"auth.passwordReset.tokenTTL":       time.Hour,
+		"auth.passwordReset.enabled":        true,
+		"auth.password.enabled":             true,
+		"auth.oidc.autoLinkByVerifiedEmail": true,
 	})
 }
 
@@ -181,13 +277,47 @@ func newCfg() *maf.Config {
 // flipped off, for exercising the administrative disable switch.
 func newCfgPasswordResetDisabled() *maf.Config {
 	return maf.NewConfig(map[string]any{
-		"auth.token.ttl":                   15 * time.Minute,
-		"auth.session.ttl":                 7 * 24 * time.Hour,
-		"auth.session.cookie.name":         "session",
-		"auth.session.cookie.path":         "/auth/refresh",
-		"auth.session.cookie.force_secure": false,
-		"auth.passwordReset.tokenTTL":      time.Hour,
-		"auth.passwordReset.enabled":       false,
+		"auth.token.ttl":                    15 * time.Minute,
+		"auth.session.ttl":                  7 * 24 * time.Hour,
+		"auth.session.cookie.name":          "session",
+		"auth.session.cookie.path":          "/auth/refresh",
+		"auth.session.cookie.force_secure":  false,
+		"auth.passwordReset.tokenTTL":       time.Hour,
+		"auth.passwordReset.enabled":        false,
+		"auth.password.enabled":             true,
+		"auth.oidc.autoLinkByVerifiedEmail": true,
+	})
+}
+
+// newCfgPasswordLoginDisabled is newCfg with auth.password.enabled flipped
+// off, for exercising an OIDC-only deployment.
+func newCfgPasswordLoginDisabled() *maf.Config {
+	return maf.NewConfig(map[string]any{
+		"auth.token.ttl":                    15 * time.Minute,
+		"auth.session.ttl":                  7 * 24 * time.Hour,
+		"auth.session.cookie.name":          "session",
+		"auth.session.cookie.path":          "/auth/refresh",
+		"auth.session.cookie.force_secure":  false,
+		"auth.passwordReset.tokenTTL":       time.Hour,
+		"auth.passwordReset.enabled":        true,
+		"auth.password.enabled":             false,
+		"auth.oidc.autoLinkByVerifiedEmail": true,
+	})
+}
+
+// newCfgAutoLinkDisabled is newCfg with auth.oidc.autoLinkByVerifiedEmail
+// flipped off, for exercising the "never auto-link" configuration.
+func newCfgAutoLinkDisabled() *maf.Config {
+	return maf.NewConfig(map[string]any{
+		"auth.token.ttl":                    15 * time.Minute,
+		"auth.session.ttl":                  7 * 24 * time.Hour,
+		"auth.session.cookie.name":          "session",
+		"auth.session.cookie.path":          "/auth/refresh",
+		"auth.session.cookie.force_secure":  false,
+		"auth.passwordReset.tokenTTL":       time.Hour,
+		"auth.passwordReset.enabled":        true,
+		"auth.password.enabled":             true,
+		"auth.oidc.autoLinkByVerifiedEmail": false,
 	})
 }
 
@@ -202,7 +332,7 @@ func newUser(username, plainPassword string, active bool, pm *passwords.Manager)
 }
 
 func newAuthSvc(users usersRepository, sessions sessionsRepository) *AuthService {
-	return NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM())
+	return NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), &mockIdentities{})
 }
 
 func loginReq(username, password string) *dto.CredentialsLoginRequest {
@@ -219,7 +349,7 @@ func TestLogin_Success(t *testing.T) {
 		byID:       map[string]*entities.User{user.ID.String(): user},
 	}
 	sessions := &mockSessions{}
-	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "1.2.3.4", "TestAgent", false)
 
@@ -262,7 +392,7 @@ func TestLogin_WrongPassword(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "wrong"), "", "", false)
 
@@ -291,7 +421,7 @@ func TestLogin_InactiveUser(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", false, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "", "", false)
 
@@ -315,7 +445,7 @@ func TestLogin_SessionCreationError(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{createErr: errors.New("db full")}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{createErr: errors.New("db full")}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	_, _, err := svc.Login(loginReq("alice", "secret"), "", "", false)
 	if err == nil {
@@ -381,7 +511,7 @@ func TestValidateAccess_ReturnsUser(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	accessToken, _ := createAccessToken(svc.accessSecret(), user.ID.String(), time.Minute)
 
@@ -479,7 +609,7 @@ func TestChangePassword_Success(t *testing.T) {
 	users := &mockUsers{
 		byID: map[string]*entities.User{user.ID.String(): user},
 	}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	ok, err := svc.ChangePassword(user.ID.String(), "oldpass", "newpass")
 
@@ -503,7 +633,7 @@ func TestChangePassword_WrongCurrentPassword(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "oldpass", true, pm)
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
 
 	ok, err := svc.ChangePassword(user.ID.String(), "wrongpass", "newpass")
 
@@ -546,7 +676,7 @@ func TestRequestPasswordReset_NoMailerWired_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 	// Deliberately no svc.SetMailer(...) call.
 
 	if err := svc.RequestPasswordReset("alice"); err != nil {
@@ -562,7 +692,7 @@ func TestRequestPasswordReset_Disabled_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -587,7 +717,7 @@ func TestConfirmPasswordReset_Disabled_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -604,7 +734,7 @@ func TestConfirmPasswordReset_Disabled_Fails(t *testing.T) {
 func TestRequestPasswordReset_UnknownUsername_IsNoop(t *testing.T) {
 	users := &mockUsers{byUsername: map[string]*entities.User{}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, newPM())
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, newPM(), &mockIdentities{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -624,7 +754,7 @@ func TestRequestPasswordReset_InactiveUser_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", false, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -641,7 +771,7 @@ func TestRequestPasswordReset_HappyPath_SendsTemplateAndCreatesToken(t *testing.
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "https://example.com/reset-password/")
 
@@ -679,7 +809,7 @@ func TestRequestPasswordReset_DeletesPreviousUnusedTokens(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 	svc.SetMailer(&fakeCredentialsMailer{}, "")
 
 	if err := svc.RequestPasswordReset("alice"); err != nil {
@@ -712,7 +842,7 @@ func TestConfirmPasswordReset_ValidToken_UpdatesPasswordAndClearsSessions(t *tes
 			"session-1": {UserID: user.ID},
 		},
 	}
-	svc := NewAuthService(newCfg(), testSecret, users, sessions, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, tokens, pm, &mockIdentities{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -751,7 +881,7 @@ func TestConfirmPasswordReset_ExpiredToken_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -775,7 +905,7 @@ func TestConfirmPasswordReset_AlreadyUsedToken_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
 
 	firstOK, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil || !firstOK {
@@ -788,5 +918,217 @@ func TestConfirmPasswordReset_AlreadyUsedToken_Fails(t *testing.T) {
 	}
 	if secondOK {
 		t.Fatal("expected ok=false when reusing an already-consumed token")
+	}
+}
+
+// --- Login: auth.password.enabled ---
+
+func TestLogin_PasswordLoginDisabled_Fails(t *testing.T) {
+	pm := newPM()
+	user := newUser("alice", "secret", true, pm)
+	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
+	svc := NewAuthService(newCfgPasswordLoginDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+
+	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "", "", false)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if accessToken != "" || cookie != nil {
+		t.Error("expected empty token and nil cookie when password login is disabled, even with correct credentials")
+	}
+}
+
+// --- CompleteExternalLogin ---
+
+func externalIdentity() ExternalIdentity {
+	return ExternalIdentity{
+		ProviderType:  "oidc",
+		ProviderID:    uuid.NewV4(),
+		Subject:       "sub-123",
+		Email:         "alice@example.com",
+		EmailVerified: true,
+		FirstName:     "Alice",
+		LastName:      "Anderson",
+	}
+}
+
+func TestCompleteExternalLogin_NewIdentity_JITCreatesUser(t *testing.T) {
+	users := &mockUsers{}
+	identities := &mockIdentities{}
+	sessions := &mockSessions{}
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), identities)
+
+	identity := externalIdentity()
+	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "1.2.3.4", "TestAgent", false)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if accessToken == "" || cookie == nil {
+		t.Fatal("expected a token and refresh cookie for a newly provisioned user")
+	}
+	if len(users.created) != 1 {
+		t.Fatalf("expected exactly one JIT-created user, got %d", len(users.created))
+	}
+	created := users.created[0]
+	if created.Email != identity.Email || !created.Active {
+		t.Errorf("unexpected created user: %+v", created)
+	}
+	linked, _ := identities.FindByProviderSubject(identity.ProviderType, identity.ProviderID, identity.Subject)
+	if linked == nil || linked.UserID != created.ID {
+		t.Error("expected a UserIdentity linking the new user to the external identity")
+	}
+}
+
+func TestCompleteExternalLogin_ExistingIdentity_LogsInLinkedUser(t *testing.T) {
+	pm := newPM()
+	user := newUser("alice", "unused", true, pm)
+	identity := externalIdentity()
+	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
+	identities := &mockIdentities{}
+	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "", "", false)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if accessToken == "" || cookie == nil {
+		t.Fatal("expected a token and refresh cookie for an already-linked identity")
+	}
+	if len(users.created) != 0 {
+		t.Error("must not JIT-create a user when an identity is already linked")
+	}
+}
+
+func TestCompleteExternalLogin_ExistingIdentity_InactiveUser_FailsClosed(t *testing.T) {
+	pm := newPM()
+	user := newUser("alice", "unused", false, pm) // inactive
+	identity := externalIdentity()
+	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
+	identities := &mockIdentities{}
+	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "", "", false)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if accessToken != "" || cookie != nil {
+		t.Error("expected empty token and nil cookie for a deactivated linked user")
+	}
+}
+
+func TestCompleteExternalLogin_VerifiedEmailMatch_AutoLinksExistingUser(t *testing.T) {
+	pm := newPM()
+	existing := newUser("alice", "unused", true, pm)
+	identity := externalIdentity() // Email: alice@example.com, EmailVerified: true
+	existing.Email = identity.Email
+	users := &mockUsers{
+		byID:    map[string]*entities.User{existing.ID.String(): existing},
+		byEmail: map[string]*entities.User{existing.Email: existing},
+	}
+	identities := &mockIdentities{}
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(users.created) != 0 {
+		t.Error("expected auto-link to reuse the existing user, not create a new one")
+	}
+	linked, _ := identities.FindByProviderSubject(identity.ProviderType, identity.ProviderID, identity.Subject)
+	if linked == nil || linked.UserID != existing.ID {
+		t.Fatal("expected the new identity to be linked to the existing user by verified email")
+	}
+}
+
+func TestCompleteExternalLogin_UnverifiedEmailMatch_DoesNotAutoLink(t *testing.T) {
+	pm := newPM()
+	existing := newUser("alice", "unused", true, pm)
+	identity := externalIdentity()
+	identity.EmailVerified = false
+	existing.Email = identity.Email
+	users := &mockUsers{
+		byID:    map[string]*entities.User{existing.ID.String(): existing},
+		byEmail: map[string]*entities.User{existing.Email: existing},
+	}
+	identities := &mockIdentities{}
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(users.created) != 1 {
+		t.Fatal("expected a brand-new user to be JIT-created rather than auto-linking on an unverified email")
+	}
+}
+
+func TestCompleteExternalLogin_AutoLinkDisabled_DoesNotAutoLinkEvenWhenVerified(t *testing.T) {
+	pm := newPM()
+	existing := newUser("alice", "unused", true, pm)
+	identity := externalIdentity()
+	existing.Email = identity.Email
+	users := &mockUsers{
+		byID:    map[string]*entities.User{existing.ID.String(): existing},
+		byEmail: map[string]*entities.User{existing.Email: existing},
+	}
+	identities := &mockIdentities{}
+	svc := NewAuthService(newCfgAutoLinkDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(users.created) != 1 {
+		t.Fatal("expected a brand-new user to be JIT-created when auto-link is administratively disabled")
+	}
+}
+
+func TestCompleteExternalLogin_AdminClaimMapping_SyncsOnEveryLogin(t *testing.T) {
+	pm := newPM()
+	user := newUser("alice", "unused", true, pm)
+	user.Admin = false
+	identity := externalIdentity()
+	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
+	identities := &mockIdentities{}
+	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	wantAdmin := true
+	identity.Admin = &wantAdmin
+	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, ok := users.adminSetTo[user.ID.String()]; !ok || !got {
+		t.Errorf("expected SetAdmin(%s, true) to be called, got %v (called=%v)", user.ID.String(), got, ok)
+	}
+}
+
+func TestCompleteExternalLogin_NoAdminClaimMapping_LeavesAdminUntouched(t *testing.T) {
+	pm := newPM()
+	user := newUser("alice", "unused", true, pm)
+	user.Admin = true
+	identity := externalIdentity() // Admin: nil
+	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
+	identities := &mockIdentities{}
+	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+
+	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, called := users.adminSetTo[user.ID.String()]; called {
+		t.Error("SetAdmin must not be called when the identity carries no admin-claim mapping result")
 	}
 }

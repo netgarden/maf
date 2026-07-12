@@ -26,16 +26,33 @@ func NewAuthenticationMiddleware(authSvc *services.AuthService) rrpc.Middleware 
 	}
 }
 
-// authPaths are the rrpc-auth module's own endpoints, exempted when
-// allowAuthPaths is true. requestPasswordReset/confirmPasswordReset are
-// necessarily public too — they're how a logged-out user recovers access
-// in the first place.
+// authPaths are the rrpc-auth module's own exact-match endpoints, exempted
+// when allowAuthPaths is true. requestPasswordReset/confirmPasswordReset
+// are necessarily public too — they're how a logged-out user recovers
+// access in the first place.
 var authPaths = []string{
 	"/api/auth/login",
 	"/api/auth/logout",
 	"/api/auth/refresh",
 	"/api/auth/requestPasswordReset",
 	"/api/auth/confirmPasswordReset",
+	// PublicProviders.list — the generic, protocol-agnostic "which enabled
+	// providers exist" endpoint a login page calls to render its provider
+	// picker regardless of how many protocols (OIDC, future SAML/LDAP) are
+	// registered; see rpc/def/providers.rrpc.
+	"/api/auth/providers",
+}
+
+// authPathPrefixes covers rrpc-auth's own endpoints whose path contains a
+// variable segment ({slug:string}), so an exact-match list (authPaths)
+// can't express them. OIDCAuth's whole api/auth/oidc/* tree is public by
+// necessity — it's the login flow a logged-out browser has to reach (the
+// authorize redirect and the callback) — same status as login/logout/
+// refresh above. This deliberately does NOT cover api/admin/oidc/providers
+// (the admin CRUD registry), which still requires the consuming app's
+// normal /api/admin/* protection.
+var authPathPrefixes = []string{
+	"/api/auth/oidc/",
 }
 
 // NewAuthorizationMiddleware returns a middleware that enforces authentication
@@ -43,7 +60,8 @@ var authPaths = []string{
 // authentication middleware so the user ID is already in context.
 //
 // allowAuthPaths — when true, the rrpc-auth module's own endpoints
-// (login, logout, refresh, requestPasswordReset, confirmPasswordReset)
+// (login, logout, refresh, requestPasswordReset, confirmPasswordReset, the
+// public provider picker, and the whole api/auth/oidc/* login-flow tree)
 // are automatically allowed without a token.
 //
 // isPublic — called for every request; return true to allow access without
@@ -51,7 +69,7 @@ var authPaths = []string{
 // is sufficient.
 func NewAuthorizationMiddleware(allowAuthPaths bool, isPublic func(*rrpc.Context) bool) rrpc.Middleware {
 	return func(ctx *rrpc.Context, next func(*rrpc.Context) error) error {
-		if allowAuthPaths && slices.Contains(authPaths, ctx.Request().URL.Path) {
+		if allowAuthPaths && isAuthPath(ctx.Request().URL.Path) {
 			return next(ctx)
 		}
 		if isPublic != nil && isPublic(ctx) {
@@ -62,4 +80,16 @@ func NewAuthorizationMiddleware(allowAuthPaths bool, isPublic func(*rrpc.Context
 		}
 		return next(ctx)
 	}
+}
+
+func isAuthPath(path string) bool {
+	if slices.Contains(authPaths, path) {
+		return true
+	}
+	for _, prefix := range authPathPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }

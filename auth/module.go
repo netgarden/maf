@@ -69,6 +69,23 @@ func (m *Module) GetConfigSchema() []maf.ConfigItem {
 		// business logic of its own) even though it's really an HTTP-layer
 		// concern — see Initialize, which is the one place that reads it.
 		{Name: "auth.passwordReset.baseUrl", Type: maf.String, DefaultValue: ""},
+		// password.enabled lets an OIDC-only deployment turn off the plain
+		// username/password login path — see AuthService.Login. It never
+		// gates EnsureAdminExists (still runs unconditionally below): the
+		// flag disables the *login path*, not the row, so a misconfigured
+		// OIDC admin-claim mapping can never fully lock an operator out.
+		{Name: "auth.password.enabled", Type: maf.Bool, DefaultValue: true},
+		// oidc.callbackBaseUrl mirrors passwordReset.baseUrl above: the
+		// external origin an OIDC provider redirects back to must exactly
+		// match what's registered with that provider, so it lives in
+		// config rather than being derived per-request.
+		{Name: "auth.oidc.callbackBaseUrl", Type: maf.String, DefaultValue: ""},
+		// oidc.autoLinkByVerifiedEmail governs whether a first-time OIDC
+		// login whose IdP-asserted email matches an existing local account
+		// gets linked to it automatically — see
+		// AuthService.findOrCreateUserForNewIdentity. Never applies to an
+		// unverified email regardless of this setting.
+		{Name: "auth.oidc.autoLinkByVerifiedEmail", Type: maf.Bool, DefaultValue: true},
 	}
 }
 
@@ -89,6 +106,13 @@ func (m *Module) GetDBEntities() []interface{} {
 		&entities.User{},
 		&entities.Session{},
 		&entities.PasswordResetToken{},
+		&entities.UserIdentity{},
+		// Provider before OIDCProvider: OIDCProvider.Provider has an
+		// ON DELETE CASCADE foreign key into auth_providers, so that table
+		// must exist first — GORM AutoMigrate creates tables in the order
+		// given here.
+		&entities.Provider{},
+		&entities.OIDCProvider{},
 	}
 }
 
@@ -99,7 +123,9 @@ func (m *Module) Initialize() error {
 	// Cross-module config: read security.secret without importing the security config type.
 	secret := m.config.GetString("security.secret")
 
-	// Security module is still needed for the passwords service (not config).
+	// Security module is still needed for the passwords service (not config)
+	// and the encryption manager OIDCProvidersService uses to keep client
+	// secrets off disk in plaintext.
 	securityModule := m.manager.GetModule("security").(*security.Module)
 	m.passwordsManager = securityModule.GetPasswordsManager()
 
@@ -112,6 +138,7 @@ func (m *Module) Initialize() error {
 		secret,
 		m.passwordsManager,
 		locksService,
+		securityModule.GetEncryptionManager(),
 	)
 	err = m.servicesManager.Init()
 	if err != nil {

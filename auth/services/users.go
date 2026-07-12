@@ -3,12 +3,14 @@ package services
 import (
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/netgarden/maf/auth/dto"
 	"github.com/netgarden/maf/auth/entities"
 	"github.com/netgarden/maf/datatables"
 	"github.com/netgarden/maf/locks"
 	"github.com/netgarden/maf/security/passwords"
+	uuid "github.com/satori/go.uuid"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +53,68 @@ func (s *UsersService) GetUser(id string) (*entities.User, error) {
 
 func (s *UsersService) GetUserByUsername(username string) (*entities.User, error) {
 	return s.getUser(s.db, "username", username)
+}
+
+func (s *UsersService) GetUserByEmail(email string) (*entities.User, error) {
+	return s.getUser(s.db, "email", email)
+}
+
+// CreateExternalUser JIT-provisions a User for a first-time external-login
+// (OIDC today) identity that didn't match any existing account — see
+// AuthService.CompleteExternalLogin. Active=true, Admin=false; Password is
+// left at its zero value, which the SHA512 encoder never produces from
+// Encode, so password login correctly fails closed for these users until
+// (if ever) an admin sets one.
+func (s *UsersService) CreateExternalUser(email, firstName, lastName string) (*entities.User, error) {
+	username, err := s.uniqueUsernameFor(email)
+	if err != nil {
+		return nil, err
+	}
+
+	user := &entities.User{
+		Username:  username,
+		Email:     email,
+		FirstName: firstName,
+		LastName:  lastName,
+		Active:    true,
+	}
+	if err := s.db.Save(user).Error; err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// SetAdmin sets User.Admin directly — used to sync the flag from an
+// external provider's admin-claim mapping on every login (see
+// AuthService.CompleteExternalLogin), independent of UpdateUser's full-row
+// admin-UI update path.
+func (s *UsersService) SetAdmin(id string, admin bool) error {
+	return s.db.Model(&entities.User{}).Where("id = ?", id).Update("admin", admin).Error
+}
+
+// uniqueUsernameFor picks a username for CreateExternalUser: the local part
+// of email if free, else the full email, else a random fallback. Usernames
+// have no DB-level uniqueness constraint in this codebase (see CreateUser's
+// own check-then-create above), so this only needs to avoid the common
+// case, not guarantee atomicity under a concurrent-signup race.
+func (s *UsersService) uniqueUsernameFor(email string) (string, error) {
+	var candidates []string
+	if email != "" {
+		if at := strings.IndexByte(email, '@'); at > 0 {
+			candidates = append(candidates, email[:at])
+		}
+		candidates = append(candidates, email)
+	}
+	for _, candidate := range candidates {
+		existing, err := s.GetUserByUsername(candidate)
+		if err != nil {
+			return "", err
+		}
+		if existing == nil {
+			return candidate, nil
+		}
+	}
+	return "user-" + uuid.NewV4().String(), nil
 }
 
 // CreateUser creates a new user with a hashed password. Returns (nil, nil)

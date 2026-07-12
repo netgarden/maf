@@ -43,11 +43,18 @@ func (m *Module) Initialize() error {
 
 	authSvc := authMod.GetServicesManager().GetAuthService()
 	usersSvc := authMod.GetServicesManager().GetUsersService()
+	providersSvc := authMod.GetServicesManager().GetProvidersService()
+	oidcAuthSvc := authMod.GetServicesManager().GetOIDCAuthService()
+	oidcProvidersSvc := authMod.GetServicesManager().GetOIDCProvidersService()
 
 	m.rrpcModule = rpc.NewModule()
 	m.rrpcModule.SetAuthService(impl.NewAuthService(authSvc))
 	m.rrpcModule.SetProfileService(impl.NewProfileService(authSvc))
 	m.rrpcModule.SetUsersService(impl.NewUsersService(usersSvc))
+	m.rrpcModule.SetProvidersService(impl.NewProvidersService(providersSvc))
+	m.rrpcModule.SetPublicProvidersService(impl.NewPublicProvidersService(providersSvc))
+	m.rrpcModule.SetOIDCAuthService(impl.NewOIDCAuthService(oidcAuthSvc))
+	m.rrpcModule.SetOIDCProvidersService(impl.NewOIDCProvidersService(oidcProvidersSvc))
 
 	return nil
 }

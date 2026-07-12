@@ -123,13 +123,20 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to connect to test database: %v", err)
 	}
 
-	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}); err != nil {
+	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}, &entities.Provider{}, &entities.OIDCProvider{}, &entities.UserIdentity{}, &entities.Session{}); err != nil {
 		t.Fatalf("failed to migrate tables: %v", err)
 	}
 
 	reset := func() {
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.User{})
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&locks.Lock{})
+		// OIDCProvider before Provider: the FK is ON DELETE CASCADE so
+		// order doesn't strictly matter, but deleting the child explicitly
+		// first keeps this list's intent obvious.
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.OIDCProvider{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.Provider{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.UserIdentity{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.Session{})
 	}
 	reset()
 	t.Cleanup(reset)

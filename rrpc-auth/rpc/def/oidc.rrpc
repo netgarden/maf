@@ -1,0 +1,73 @@
+struct OIDCProviderItem {
+    id               string
+    slug             string
+    name             string
+    issuerUrl        string
+    clientId         string
+    scopes           string
+    enabled          bool
+    adminClaimPath   string
+    adminClaimValues []string
+}
+
+struct CreateOIDCProviderRequest {
+    slug             string
+    name             string
+    issuerUrl        string
+    clientId         string
+    clientSecret     string
+    scopes           string
+    enabled          bool
+    adminClaimPath   string
+    adminClaimValues []string
+}
+
+struct UpdateOIDCProviderRequest {
+    name             string
+    issuerUrl        string
+    clientId         string
+    clientSecret     string
+    scopes           string
+    enabled          bool
+    adminClaimPath   string
+    adminClaimValues []string
+}
+
+error OIDCProviderNotFound {
+    code = 7
+    http_code = 404
+    message = "oidc provider not found"
+}
+
+error OIDCProviderAlreadyExists {
+    code = 8
+    http_code = 409
+    message = "an oidc provider with this slug already exists"
+}
+
+error OIDCLoginFailed {
+    code = 9
+    http_code = 400
+    message = "oidc login failed"
+}
+
+@Path("api/auth/oidc")
+service OIDCAuth {
+    @method("GET")
+    @Path("{slug:string}/login")
+    login()
+    @method("GET")
+    @Path("{slug:string}/callback")
+    callback()
+}
+
+@Path("api/admin/oidc/providers")
+service OIDCProviders {
+    @method("GET")
+    @Path("{id:string}")
+    get() (OIDCProviderItem)
+    @Path("")
+    create(request CreateOIDCProviderRequest) (OIDCProviderItem)
+    @Path("{id:string}")
+    update(request UpdateOIDCProviderRequest) (OIDCProviderItem)
+}

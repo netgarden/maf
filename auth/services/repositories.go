@@ -11,6 +11,21 @@ type usersRepository interface {
 	GetUser(id string) (*entities.User, error)
 	GetUserByUsername(username string) (*entities.User, error)
 	UpdatePassword(id, passwordHash string) error
+
+	// GetUserByEmail, CreateExternalUser and SetAdmin exist for
+	// AuthService.CompleteExternalLogin's JIT-provisioning/account-linking
+	// flow (see identity.go) — nothing in the plain username/password path
+	// uses them.
+	GetUserByEmail(email string) (*entities.User, error)
+	CreateExternalUser(email, firstName, lastName string) (*entities.User, error)
+	SetAdmin(id string, admin bool) error
+}
+
+// identitiesRepository backs AuthService.CompleteExternalLogin's
+// (ProviderType, ProviderID, Subject) lookup and linking — see identity.go.
+type identitiesRepository interface {
+	FindByProviderSubject(providerType string, providerID uuid.UUID, subject string) (*entities.UserIdentity, error)
+	Create(userID uuid.UUID, providerType string, providerID uuid.UUID, subject, email string) (*entities.UserIdentity, error)
 }
 
 type sessionsRepository interface {

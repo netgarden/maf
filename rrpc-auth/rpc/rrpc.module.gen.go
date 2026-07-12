@@ -26,8 +26,24 @@ func (s *Module) SetAuthService(authService AuthService) {
 	s.services["Auth"] = newAuthServiceHandler(authService)
 }
 
+func (s *Module) SetOIDCAuthService(oIDCAuthService OIDCAuthService) {
+	s.services["OIDCAuth"] = newOIDCAuthServiceHandler(oIDCAuthService)
+}
+
+func (s *Module) SetOIDCProvidersService(oIDCProvidersService OIDCProvidersService) {
+	s.services["OIDCProviders"] = newOIDCProvidersServiceHandler(oIDCProvidersService)
+}
+
 func (s *Module) SetProfileService(profileService ProfileService) {
 	s.services["Profile"] = newProfileServiceHandler(profileService)
+}
+
+func (s *Module) SetProvidersService(providersService ProvidersService) {
+	s.services["Providers"] = newProvidersServiceHandler(providersService)
+}
+
+func (s *Module) SetPublicProvidersService(publicProvidersService PublicProvidersService) {
+	s.services["PublicProviders"] = newPublicProvidersServiceHandler(publicProvidersService)
 }
 
 func (s *Module) SetUsersService(usersService UsersService) {

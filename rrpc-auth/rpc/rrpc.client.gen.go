@@ -19,7 +19,11 @@ func NewClient(url string) *Client {
 	}
 
 	c.Auth = newAuthServiceClientHandler(c)
+	c.OIDCAuth = newOIDCAuthServiceClientHandler(c)
+	c.OIDCProviders = newOIDCProvidersServiceClientHandler(c)
 	c.Profile = newProfileServiceClientHandler(c)
+	c.Providers = newProvidersServiceClientHandler(c)
+	c.PublicProviders = newPublicProvidersServiceClientHandler(c)
 	c.Users = newUsersServiceClientHandler(c)
 
 	return c
@@ -29,9 +33,13 @@ type Client struct {
 	url    string
 	client *http.Client
 
-	Auth    *AuthServiceClientHandler
-	Profile *ProfileServiceClientHandler
-	Users   *UsersServiceClientHandler
+	Auth            *AuthServiceClientHandler
+	OIDCAuth        *OIDCAuthServiceClientHandler
+	OIDCProviders   *OIDCProvidersServiceClientHandler
+	Profile         *ProfileServiceClientHandler
+	Providers       *ProvidersServiceClientHandler
+	PublicProviders *PublicProvidersServiceClientHandler
+	Users           *UsersServiceClientHandler
 }
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
