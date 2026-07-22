@@ -586,6 +586,66 @@ func TestProcessBatch_GivesUpPastMaxAge(t *testing.T) {
 	}
 }
 
+// TestProcessBatch_NilSender_DoesNotClaimRows proves that when mailer.smtp.host
+// is unset (Module.Initialize passes a nil Sender), ProcessBatch never even
+// claims a due row — it stays exactly queued, not just "claimed then never
+// delivered".
+func TestProcessBatch_NilSender_DoesNotClaimRows(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, nil)
+
+	email, err := svc.EnqueueTx(db, &SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("EnqueueTx: %v", err)
+	}
+
+	if err := svc.ProcessBatch(context.Background()); err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+
+	got, err := svc.GetEmail(email.ID.String())
+	if err != nil {
+		t.Fatalf("GetEmail: %v", err)
+	}
+	if got.Status != EmailStatusQueued {
+		t.Errorf("expected status to remain queued, got %v", got.Status)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("expected 0 attempts (row never claimed), got %d", got.Attempts)
+	}
+}
+
+// TestSend_NilSender_QueuesWithoutAttemptingDelivery proves the direct-send
+// fast path (tryDeliverDirect) is skipped entirely with a nil Sender —
+// Send still enqueues normally, but the row is left queued rather than
+// claimed-and-never-finished.
+func TestSend_NilSender_QueuesWithoutAttemptingDelivery(t *testing.T) {
+	db := testDB(t)
+	svc := newTestServiceWithSender(t, db, nil)
+
+	email, err := svc.Send(&SendRequest{To: []string{"a@example.com"}, Subject: "x", BodyText: "x"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	got, err := svc.GetEmail(email.ID.String())
+	if err != nil {
+		t.Fatalf("GetEmail: %v", err)
+	}
+	if got.Status != EmailStatusQueued {
+		t.Errorf("expected status to remain queued, got %v", got.Status)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("expected 0 attempts (no direct-send attempt made), got %d", got.Attempts)
+	}
+	if got.LastError != nil {
+		t.Errorf("expected no LastError, got %v", *got.LastError)
+	}
+	if svc.DeliveryEnabled() {
+		t.Error("expected DeliveryEnabled() to be false with a nil sender")
+	}
+}
+
 func TestSendTemplate_EndToEnd(t *testing.T) {
 	db := testDB(t)
 	svc := newTestServiceWithSender(t, db, &fakeSender{})

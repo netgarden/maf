@@ -8,6 +8,7 @@ package mailer
 
 import (
 	"errors"
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
@@ -49,12 +50,20 @@ func (m *Module) GetDependencies() []string { return []string{"jobs", "security"
 
 func (m *Module) GetConfigSchema() []maf.ConfigItem {
 	return []maf.ConfigItem{
-		{Name: "mailer.smtp.host", Type: maf.String, Required: true},
+		// smtp.host is deliberately not Required — see Initialize: when
+		// unset, emails are still queued but never delivered (see
+		// README.md's "Running without SMTP configured").
+		{Name: "mailer.smtp.host", Type: maf.String},
 		{Name: "mailer.smtp.port", Type: maf.Int, DefaultValue: 587},
 		{Name: "mailer.smtp.username", Type: maf.String},
 		{Name: "mailer.smtp.password", Type: maf.String},
 		{Name: "mailer.smtp.encryption", Type: maf.String, DefaultValue: "starttls"}, // none|starttls|tls
-		{Name: "mailer.smtp.from", Type: maf.String, Required: true},
+		// smtp.from is not Required either — like smtp.host, there's no safe
+		// static default for a real outgoing address (a placeholder would
+		// just get real mail rejected/flagged as spam), so it's validated
+		// in Initialize() instead: required only once smtp.host is actually
+		// set, i.e. once delivery is actually going to be attempted.
+		{Name: "mailer.smtp.from", Type: maf.String},
 		{Name: "mailer.smtp.timeout", Type: maf.Duration, DefaultValue: 30 * time.Second},
 
 		{Name: "mailer.retry.initialInterval", Type: maf.Duration, DefaultValue: time.Minute},
@@ -92,6 +101,19 @@ func (m *Module) GetDBEntities() []interface{} {
 	return []interface{}{&Email{}, &Template{}}
 }
 
+// validateSMTPFrom enforces that smtp.from is set whenever smtp.host is —
+// neither has a safe static default (see GetConfigSchema), so this is done
+// here in code rather than via ConfigItem.Required: unset host means
+// "queue only, no delivery ever attempted" and from is irrelevant, but a
+// set host with no from would mean actually attempting delivery with no
+// usable From address.
+func validateSMTPFrom(host, from string) error {
+	if host != "" && from == "" {
+		return errors.New("mailer: smtp.from is required when smtp.host is set")
+	}
+	return nil
+}
+
 func (m *Module) Initialize() error {
 	jobsModule, ok := m.manager.GetModule("jobs").(*jobs.Module)
 	if !ok {
@@ -105,17 +127,31 @@ func (m *Module) Initialize() error {
 
 	cfg := m.config.Sub("mailer")
 
-	sender, err := NewSMTPSender(SMTPConfig{
-		Host:       cfg.GetString("smtp.host"),
-		Port:       cfg.GetInt("smtp.port"),
-		Username:   cfg.GetString("smtp.username"),
-		Password:   cfg.GetString("smtp.password"),
-		Encryption: cfg.GetString("smtp.encryption"),
-		From:       cfg.GetString("smtp.from"),
-		Timeout:    cfg.GetDuration("smtp.timeout"),
-	})
-	if err != nil {
+	host := cfg.GetString("smtp.host")
+	from := cfg.GetString("smtp.from")
+	if err := validateSMTPFrom(host, from); err != nil {
 		return err
+	}
+
+	// A nil sender means "queue only" — see Service.ProcessBatch/
+	// tryDeliverDirect, which no-op rather than ever calling a nil Sender.
+	var sender Sender
+	if host != "" {
+		var err error
+		sender, err = NewSMTPSender(SMTPConfig{
+			Host:       host,
+			Port:       cfg.GetInt("smtp.port"),
+			Username:   cfg.GetString("smtp.username"),
+			Password:   cfg.GetString("smtp.password"),
+			Encryption: cfg.GetString("smtp.encryption"),
+			From:       from,
+			Timeout:    cfg.GetDuration("smtp.timeout"),
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		slog.Info("mailer: smtp.host not configured — emails will be queued but not delivered")
 	}
 
 	retryCfg := RetryConfig{

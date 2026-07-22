@@ -190,13 +190,26 @@ func (s *Service) SendTemplate(templateID string, to, cc, bcc []string, data any
 	})
 }
 
+// DeliveryEnabled reports whether this Service was constructed with a real
+// Sender (see Module.Initialize) — false when mailer.smtp.host is unset, in
+// which case ProcessBatch/tryDeliverDirect never attempt delivery and rows
+// simply stay queued.
+func (s *Service) DeliveryEnabled() bool {
+	return s.sender != nil
+}
+
 // ProcessBatch claims and attempts to send up to batchSize due emails. It's
 // called from a jobs.Handler (see handler.go) on a recurring tick,
 // coordinated across replicas by jobs' own per-tick lease — but the
 // per-row claimBatch below is what actually prevents any single email from
 // being sent twice, since an admin-triggered RetryEmail/CancelEmail call
-// can land on a different replica than whichever one is mid-tick.
+// can land on a different replica than whichever one is mid-tick. A nil
+// sender (see DeliveryEnabled) short-circuits before any row is even
+// claimed, so unconfigured deployments never flip queued rows to sending.
 func (s *Service) ProcessBatch(ctx context.Context) error {
+	if s.sender == nil {
+		return nil
+	}
 
 	claimed, err := s.claimBatch()
 	if err != nil {
@@ -304,8 +317,14 @@ func (s *Service) claimByID(id string) (*Email, error) {
 // directSendTimeout so a slow/unreachable SMTP server can't hang around
 // forever; if it doesn't finish in time, the row is simply left claimable
 // and the next tick sends it normally. Runs in its own goroutine so Send
-// never blocks its caller on an SMTP round-trip.
+// never blocks its caller on an SMTP round-trip. A nil sender (see
+// DeliveryEnabled) is a no-op — the row is left queued for whenever SMTP
+// is eventually configured.
 func (s *Service) tryDeliverDirect(email *Email) {
+	if s.sender == nil {
+		return
+	}
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.directSendTimeout)
 		defer cancel()

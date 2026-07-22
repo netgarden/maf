@@ -73,6 +73,8 @@ var (
 
 	ErrEmailNotRetryable = rrpc.RRPCError{Code: 2, Name: "EmailNotRetryable", Message: "email is not in a retryable state", HTTPStatus: 409}
 
+	ErrSMTPNotConfigured = rrpc.RRPCError{Code: 7, Name: "SMTPNotConfigured", Message: "smtp is not configured; emails are queued but never delivered", HTTPStatus: 409}
+
 	ErrTemplateInvalid = rrpc.RRPCError{Code: 5, Name: "TemplateInvalid", Message: "template failed to parse", HTTPStatus: 400}
 
 	ErrTemplateNotFound = rrpc.RRPCError{Code: 4, Name: "TemplateNotFound", Message: "template not found", HTTPStatus: 404}

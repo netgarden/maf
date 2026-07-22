@@ -80,6 +80,12 @@ error TestEmailRecipientRequired {
     message = "recipient email address is required"
 }
 
+error SMTPNotConfigured {
+    code = 7
+    http_code = 409
+    message = "smtp is not configured; emails are queued but never delivered"
+}
+
 @Path("api/admin/mailer")
 service Mailer {
     @method("GET")

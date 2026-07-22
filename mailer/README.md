@@ -170,12 +170,12 @@ longer matches it. No special handling needed.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `mailer.smtp.host` | string | — (required) | |
+| `mailer.smtp.host` | string | — | optional — unset means emails are queued but never delivered, see "Running without SMTP configured" below |
 | `mailer.smtp.port` | int | `587` | |
 | `mailer.smtp.username` | string | — | empty = no auth |
 | `mailer.smtp.password` | string | — | |
 | `mailer.smtp.encryption` | string | `starttls` | `none` \| `starttls` \| `tls` |
-| `mailer.smtp.from` | string | — (required) | |
+| `mailer.smtp.from` | string | — | required only if `smtp.host` is set (see "Running without SMTP configured") |
 | `mailer.smtp.timeout` | duration | `30s` | per-connection SMTP timeout |
 | `mailer.retry.initialInterval` | duration | `1m` | delay before the 2nd attempt |
 | `mailer.retry.multiplier` | float | `3.0` | exponential backoff factor |
@@ -194,18 +194,46 @@ longer matches it. No special handling needed.
 send — an unknown value fails the application to start rather than failing
 silently later.
 
-Also required: `security.encryption.key` (`maf/security`'s own config,
-not `mailer`'s) — see "Encryption at rest" below.
+Also required: `security.secret` (`maf/security`'s own config, not
+`mailer`'s) — see "Encryption at rest" below.
+
+## Running without SMTP configured
+
+Neither `mailer.smtp.host` nor `mailer.smtp.from` is a schema-`Required`
+config item — there's no safe static default for either (a placeholder
+`from` address would just get real mail rejected/flagged as spam once
+delivery is actually attempted), so `Module.Initialize` validates them in
+code instead (`validateSMTPFrom`): `from` is only required once `host` is
+actually set, i.e. only once delivery is actually going to be attempted;
+leaving both unset is a valid, deliberate "queue only" configuration.
+
+Leaving `host` unset means `Module.Initialize` never constructs a
+`Sender`, and `Service` is built with a `nil` one. `Service.Send`/
+`EnqueueTx`/`SendTemplate` still
+work exactly as always (a row is written to `mailer_queue` with status
+`queued`), but nothing ever attempts to actually deliver it: `ProcessBatch`
+(the recurring tick) returns immediately without claiming any row, and
+`Send`'s direct-delivery fast path (`tryDeliverDirect`) is skipped
+entirely. Rows just stay `queued` indefinitely — they're never pushed
+toward `failed`, since that only happens after a real (failed) send
+attempt. `mailer-retention` is unaffected either way; it only ever purges
+terminal-status rows and has no SMTP dependency. The admin API's
+`sendTest` action returns `SMTPNotConfigured` immediately instead of
+queuing a test email that would never be delivered.
+
+`Service.DeliveryEnabled()` reports whether a real `Sender` is configured,
+for anything (like `sendTest`) that needs to distinguish the two cases.
 
 ## Encryption at rest
 
 `Email.BodyText`/`BodyHTML` are encrypted (AES-256-GCM) before being
 written to `mailer_queue`, using `maf/security`'s `GetEncryptionManager()`
-— configured via `security.encryption.key`, **deliberately separate** from
-`security.secret` (used elsewhere for JWT signing). This is entirely an
-internal storage-layer detail: every public `Service` method (`Send`,
-`GetEmail`, `ListEmails`, the batch claim feeding the actual SMTP send) is
-still plaintext in, plaintext out — nothing about the public API changes.
+— keyed from `security.secret` (with a fixed suffix `security.Module`
+appends before deriving the actual encryption key, so it's never the same
+raw value used elsewhere for JWT signing). This is entirely an internal
+storage-layer detail: every public `Service` method (`Send`, `GetEmail`,
+`ListEmails`, the batch claim feeding the actual SMTP send) is still
+plaintext in, plaintext out — nothing about the public API changes.
 
 Not encrypted, deliberately: `Subject` (the admin API's `ListEmailsFilter.Search`
 does `subject ILIKE`, which wouldn't work against ciphertext), `To`/`Cc`/`Bcc`
@@ -214,10 +242,10 @@ body content), and `Template.BodyText`/`BodyHTML` (templates are closer to
 code/config than data — the actual sensitive content only exists once
 rendered into a specific queued `Email`).
 
-A row encrypted under one `security.encryption.key` cannot be decrypted
-after that key changes without a data migration — `GetEmail`/`ListEmails`/
-the queue tick will return a decrypt error for it, not silently corrupt or
-crash (see `TestGetEmail_WrongKeyFailsToDecrypt`).
+A row encrypted under one `security.secret` cannot be decrypted after that
+secret changes without a data migration — `GetEmail`/`ListEmails`/the queue
+tick will return a decrypt error for it, not silently corrupt or crash (see
+`TestGetEmail_WrongKeyFailsToDecrypt`).
 
 `maf/security/encryption.Manager` works in raw `[]byte` and prefixes its
 output with an 8-byte numeric algorithm identifier, dispatching `Decrypt`

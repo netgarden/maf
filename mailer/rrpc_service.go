@@ -102,6 +102,9 @@ func (s *mailerRPCService) SendTest(ctx *rrpc.Context, req *rpc.SendTestEmailReq
 	if strings.TrimSpace(req.To) == "" {
 		return nil, rpc.ErrTestEmailRecipientRequired
 	}
+	if !s.svc.DeliveryEnabled() {
+		return nil, rpc.ErrSMTPNotConfigured
+	}
 
 	email, err := s.svc.Send(&SendRequest{
 		To:       []string{req.To},
