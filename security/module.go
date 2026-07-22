@@ -33,10 +33,6 @@ func (m *Module) SetManager(manager *maf.Manager) {
 func (m *Module) GetConfigSchema() []maf.ConfigItem {
 	return []maf.ConfigItem{
 		{Name: "security.secret", Type: maf.String, Required: true},
-		// Deliberately separate from security.secret (used for JWT signing
-		// in auth) — reusing one secret for two unrelated cryptographic
-		// purposes is bad practice even though nothing technically stops it.
-		{Name: "security.encryption.key", Type: maf.String, Required: true},
 	}
 }
 
@@ -44,9 +40,26 @@ func (m *Module) SetConfig(config *maf.Config) {
 	m.config = config
 }
 
+// encryptionKeySuffix namespaces security.secret before it's handed to
+// the encryption subsystem - a fixed constant, not a cryptographic
+// algorithm, so unlike a hash it's never a thing that could need
+// replacing later. The actual key derivation (today: SHA-256, see
+// encryption.NewAESGCMCryptor) stays inside encryption's own Cryptor
+// implementations, already covered by their Prefix-based crypto-agility -
+// the mechanism that lets a future Cryptor use a different derivation
+// while old ciphertext, tagged with the old Cryptor's Prefix, still
+// decrypts under it. Baking a hash in here instead would create a
+// second, un-versioned point of permanence that mechanism doesn't cover:
+// this way, only this constant is permanent, not a whole algorithm
+// choice.
+const encryptionKeySuffix = "::encryption_key"
+
 func (m *Module) Initialize() error {
 	m.passwordsManager = passwords.NewManager()
-	m.encryptionManager = encryption.NewManager(m.config.GetString("security.encryption.key"))
+
+	secret := m.config.GetString("security.secret")
+	m.encryptionManager = encryption.NewManager(secret + encryptionKeySuffix)
+
 	return nil
 }
 

@@ -1,8 +1,10 @@
 // Package encryption provides symmetric encryption for data at rest (e.g.
-// a queued email's body — see github.com/netgarden/maf/mailer), separate
-// from the JWT-signing secret in github.com/netgarden/maf/security's own
-// config, since reusing one secret for two unrelated cryptographic
-// purposes is bad practice even when nothing technically stops it.
+// a queued email's body — see github.com/netgarden/maf/mailer). Callers
+// shouldn't hand NewManager the exact same secret used raw for some other
+// cryptographic purpose elsewhere (e.g. JWT signing) - security.Module
+// namespaces security.secret with a fixed suffix before passing it here
+// for exactly this reason - but this package itself doesn't know or care
+// where its secret comes from.
 package encryption
 
 import (

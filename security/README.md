@@ -51,12 +51,21 @@ storing into a `BYTEA` column, or hashing/comparing raw ciphertext,
 shouldn't pay for a text encoding it doesn't need.
 
 `NewManager(secret string)` derives an AES-256 key from `secret` via
-SHA-256, so this configures the same simple way `security.secret` already
-does (a plain string, not a properly-sized/encoded key an operator has to
-get exactly right) — and is **deliberately a separate secret**
-(`security.encryption.key`) from `security.secret` (used for JWT signing
-in `maf/auth`), since reusing one secret for two unrelated cryptographic
-purposes is bad practice even when nothing technically stops it.
+SHA-256 (see `NewAESGCMCryptor`), so this configures the same simple way
+`security.secret` already does (a plain string, not a properly-sized/encoded
+key an operator has to get exactly right). `encryption` itself doesn't
+know or care where `secret` comes from — `security.Module` is the one
+that cares that reusing the exact same secret raw for two unrelated
+cryptographic purposes (this, and JWT signing in `maf/auth`) is bad
+practice: it namespaces `security.secret` with a fixed, permanent suffix
+before ever passing it here, so only one config value is needed but the
+value `encryption` actually keys on is never the bare secret. That suffix
+is deliberately *not* a hash — hashing here would be a second,
+un-versioned cryptographic commitment outside the `Cryptor.Prefix()`
+crypto-agility mechanism below, unable to change later without breaking
+every already-encrypted value. The real key derivation algorithm stays
+entirely inside whichever `Cryptor` owns it, already covered by that
+mechanism.
 
 ### Crypto-agility via the `Cryptor` interface
 
@@ -116,8 +125,7 @@ uses the new default.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `security.secret` | string | — (required) | Used elsewhere (`maf/auth`) for JWT signing — not read by this module itself. |
-| `security.encryption.key` | string | — (required) | Deliberately separate from `security.secret`. Derives the `encryption.Manager`'s default `Cryptor`'s key. |
+| `security.secret` | string | — (required) | Used elsewhere (`maf/auth`) for JWT signing, and — with a fixed suffix appended — to derive the `encryption.Manager`'s default `Cryptor`'s key. The only secret this module requires. |
 
 ## Testing
 
