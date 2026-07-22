@@ -1,6 +1,7 @@
 package maf
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,77 @@ func (m *startTrackingModule) Start() error {
 	*m.started = true
 	return nil
 }
+
+// initFailingModule always fails Initialize(), simulating e.g. bad config
+// or an unreachable dependency for one module partway through startup.
+type initFailingModule struct {
+	fakeModule
+}
+
+func (m *initFailingModule) Initialize() error { return errors.New("boom") }
+
+// stopTrackingModule records whether Stop() was ever called on it.
+type stopTrackingModule struct {
+	fakeModule
+	stopped *bool
+}
+
+func (m *stopTrackingModule) Initialize() error { return nil }
+func (m *stopTrackingModule) Stop() error {
+	*m.stopped = true
+	return nil
+}
+
+// TestDoStop_SkipsModulesNeverInitialized is the regression test for a real
+// crash: if module A's Initialize() fails, later modules in startOrder
+// (here, B) never get their own Initialize() called - but Start() still
+// unwinds via Stop() on failure. doStop() must not call Stop() on a module
+// that was never initialized, since its Stop() may assume state Initialize()
+// would have set up (as github.com/netgarden/maf/jobs's Module did, until
+// this was fixed - Stop() dereferenced a service field only ever assigned in
+// Initialize(), nil-panicking whenever startup failed before jobs.Initialize
+// ran).
+func TestDoStop_SkipsModulesNeverInitialized(t *testing.T) {
+	stopped := false
+	m := New(&fakeApplication{modules: []Module{
+		&initFailingModule{fakeModule: fakeModule{id: "a"}},
+		&stopTrackingModule{fakeModule: fakeModule{id: "b"}, stopped: &stopped},
+	}})
+
+	if err := m.Start(false); err == nil {
+		t.Fatal("expected startup to fail")
+	}
+	if stopped {
+		t.Fatal("expected Stop() not to be called on a module whose Initialize() never ran")
+	}
+}
+
+// TestDoStop_StopsModulesInitializedBeforeALaterFailure proves the fix
+// isn't overly broad: a module that DID successfully initialize before a
+// later phase failed elsewhere must still be stopped.
+func TestDoStop_StopsModulesInitializedBeforeALaterFailure(t *testing.T) {
+	stopped := false
+	m := New(&fakeApplication{modules: []Module{
+		&stopTrackingModule{fakeModule: fakeModule{id: "a"}, stopped: &stopped},
+		&postInitFailingModule{fakeModule: fakeModule{id: "b"}},
+	}})
+
+	if err := m.Start(false); err == nil {
+		t.Fatal("expected startup to fail")
+	}
+	if !stopped {
+		t.Fatal("expected Stop() to still be called on a module that completed Initialize()")
+	}
+}
+
+// postInitFailingModule succeeds Initialize() but fails PostInitialize(),
+// so every module's Initialize() completes before startup fails.
+type postInitFailingModule struct {
+	fakeModule
+}
+
+func (m *postInitFailingModule) Initialize() error     { return nil }
+func (m *postInitFailingModule) PostInitialize() error { return errors.New("boom") }
 
 func TestCheckDependencies_MultipleMissingDependencies_ReportsFirst(t *testing.T) {
 	m := New(&fakeApplication{modules: []Module{

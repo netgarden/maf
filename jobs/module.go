@@ -61,7 +61,9 @@ func (m *Module) Initialize() error {
 }
 
 func (m *Module) Stop() error {
-	m.service.Stop()
+	if m.service != nil {
+		m.service.Stop()
+	}
 	return nil
 }
 

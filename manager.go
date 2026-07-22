@@ -33,6 +33,13 @@ type Manager struct {
 	config     *Config
 	running    bool
 	wg         *sync.WaitGroup
+
+	// initialized tracks which modules' Initialize() (if implemented) has
+	// completed successfully, so doStop only tears down modules that are
+	// actually safe to stop - see doInitialize/doStop. nil until
+	// doInitialize runs, which correctly means "nothing is stoppable yet"
+	// if startup fails before that phase even begins.
+	initialized map[string]bool
 }
 
 func (m *Manager) GetApplication() Application {
@@ -404,10 +411,15 @@ func (m *Manager) doPreInitialize() error {
 
 func (m *Manager) doInitialize() error {
 
+	m.initialized = make(map[string]bool, len(m.startOrder))
+
 	for _, module := range m.startOrder {
 
 		provider, ok := module.(ModuleInitialize)
 		if !ok {
+			// Nothing for this module to fail at this phase, so it's just
+			// as stoppable as one that succeeded.
+			m.initialized[module.GetID()] = true
 			continue
 		}
 
@@ -416,6 +428,7 @@ func (m *Manager) doInitialize() error {
 			return err
 		}
 
+		m.initialized[module.GetID()] = true
 	}
 
 	return nil
@@ -480,12 +493,23 @@ func (m *Manager) doStart() error {
 
 // doStop stops modules in the reverse of startOrder, so a module is always
 // stopped before the dependencies it declared (which may still be in use
-// during its own Stop).
+// during its own Stop). Only modules whose Initialize() (if any) actually
+// completed are stopped - if startup failed partway through doInitialize,
+// later modules in startOrder never ran theirs, so their Stop() can't
+// assume any state Initialize() would normally have set up (see
+// m.initialized). If startup failed before doInitialize even started,
+// m.initialized is nil and every lookup is false, so nothing is stopped -
+// nothing was initialized to begin with.
 func (m *Manager) doStop() {
 	for i := len(m.startOrder) - 1; i >= 0; i-- {
 
-		provider, ok := m.startOrder[i].(ModuleStop)
+		module := m.startOrder[i]
+
+		provider, ok := module.(ModuleStop)
 		if !ok {
+			continue
+		}
+		if !m.initialized[module.GetID()] {
 			continue
 		}
 
