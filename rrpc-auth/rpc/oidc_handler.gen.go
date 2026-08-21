@@ -119,7 +119,7 @@ func (h *OIDCAuthServiceClientHandler) Login(ctx context.Context, slug string) e
 
 	methodType := "GET"
 	methodPath := fmt.Sprintf("%s/login", url.PathEscape(slug))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	_, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -133,7 +133,7 @@ func (h *OIDCAuthServiceClientHandler) Callback(ctx context.Context, slug string
 
 	methodType := "GET"
 	methodPath := fmt.Sprintf("%s/callback", url.PathEscape(slug))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	_, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -373,7 +373,7 @@ func (h *OIDCProvidersServiceClientHandler) Get(ctx context.Context, id string) 
 
 	methodType := "GET"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -396,7 +396,7 @@ func (h *OIDCProvidersServiceClientHandler) Get(ctx context.Context, id string) 
 func (h *OIDCProvidersServiceClientHandler) Create(ctx context.Context, data *CreateOIDCProviderRequest) (*OIDCProviderItem, error) {
 
 	methodType := "POST"
-	url := h.client.url + "/" + h.path
+	url := joinURLPath(h.client.url, h.path)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -424,7 +424,7 @@ func (h *OIDCProvidersServiceClientHandler) Update(ctx context.Context, id strin
 
 	methodType := "POST"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {

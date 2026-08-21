@@ -3,6 +3,7 @@ package rpc
 import (
 	"io"
 	"net/http"
+	"strings"
 )
 
 var DataMethods = []string{"POST", "PUT"}
@@ -44,6 +45,44 @@ type Client struct {
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.client.Do(req)
+}
+
+// toWebSocketURL swaps an "http"/"https" base URL for its "ws"/"wss"
+// counterpart - used by generated streaming client methods to dial, since
+// websocket.Dial requires a ws(s):// URL, not http(s)://.
+func toWebSocketURL(httpURL string) string {
+	if strings.HasPrefix(httpURL, "https://") {
+		return "wss://" + strings.TrimPrefix(httpURL, "https://")
+	}
+	if strings.HasPrefix(httpURL, "http://") {
+		return "ws://" + strings.TrimPrefix(httpURL, "http://")
+	}
+	return httpURL
+}
+
+// joinURLPath joins base with path segments, collapsing any run of "/"
+// the joined path portion picks up along the way (e.g. a service's own
+// Path already starting with "/" plus the "/" a generated client method
+// inserts between segments) down to one - the scheme separator ("://")
+// is left untouched. Mirrors the TS generator's equivalent
+// .replace(/\/+/g, '/') normalization of its built URI.
+func joinURLPath(base string, segments ...string) string {
+	joined := base
+	for _, s := range segments {
+		joined += "/" + s
+	}
+	schemeEnd := strings.Index(joined, "://")
+	if schemeEnd == -1 {
+		return collapseSlashes(joined)
+	}
+	return joined[:schemeEnd+3] + collapseSlashes(joined[schemeEnd+3:])
+}
+
+func collapseSlashes(s string) string {
+	for strings.Contains(s, "//") {
+		s = strings.ReplaceAll(s, "//", "/")
+	}
+	return s
 }
 
 func NewSizedReader(r io.Reader, size int64) *SizedReader {

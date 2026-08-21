@@ -200,7 +200,7 @@ type UsersServiceClientHandler struct {
 func (h *UsersServiceClientHandler) List(ctx context.Context, data *DatatableRequest) (*ListUsersResponse, error) {
 
 	methodType := "GET"
-	url := h.client.url + "/" + h.path
+	url := joinURLPath(h.client.url, h.path)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -227,7 +227,7 @@ func (h *UsersServiceClientHandler) List(ctx context.Context, data *DatatableReq
 func (h *UsersServiceClientHandler) Create(ctx context.Context, data *CreateUserRequest) (*UserItem, error) {
 
 	methodType := "POST"
-	url := h.client.url + "/" + h.path
+	url := joinURLPath(h.client.url, h.path)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -255,7 +255,7 @@ func (h *UsersServiceClientHandler) Update(ctx context.Context, id string, data 
 
 	methodType := "POST"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -273,7 +273,7 @@ func (h *UsersServiceClientHandler) Delete(ctx context.Context, id string) error
 
 	methodType := "DELETE"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	_, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {

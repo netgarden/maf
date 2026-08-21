@@ -102,7 +102,7 @@ func (h *ProfileServiceClientHandler) ChangePassword(ctx context.Context, data *
 
 	methodType := "POST"
 	methodPath := "changePassword"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {

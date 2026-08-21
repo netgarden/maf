@@ -1,6 +1,7 @@
 package rrpcauth
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 
@@ -15,15 +16,36 @@ import (
 // best-effort so that public routes also benefit from knowing the caller.
 func NewAuthenticationMiddleware(authSvc *services.AuthService) rrpc.Middleware {
 	return func(ctx *rrpc.Context, next func(*rrpc.Context) error) error {
-		authHeader := ctx.Request().Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token := extractBearerToken(ctx.Request()); token != "" {
 			if userID, err := authSvc.ParseAccessToken(token); err == nil {
 				authctx.SetUserID(ctx, userID)
 			}
 		}
 		return next(ctx)
 	}
+}
+
+// extractBearerToken reads the bearer token from the Authorization
+// header, falling back to the Sec-WebSocket-Protocol header for
+// WebSocket upgrade requests (a "@Stream"/"@InputStream"/"@OutputStream"
+// rrpc method, see rrpc/websocket.go) - a browser's native WebSocket
+// constructor can't set arbitrary headers on the handshake request, so
+// the generated TS client instead offers the token as a subprotocol
+// (new WebSocket(url, ["bearer", token])), which arrives here as
+// "bearer, <token>". This runs as ordinary rrpc middleware, before any
+// upgrade attempt, so it works the same way regardless of whether the
+// matched route turns out to be a streaming one.
+func extractBearerToken(r *http.Request) string {
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		parts := strings.Split(proto, ",")
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == "bearer" {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
 }
 
 // authPaths are the rrpc-auth module's own exact-match endpoints, exempted

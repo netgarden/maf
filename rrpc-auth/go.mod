@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/coreos/go-oidc/v3 v3.20.0 // indirect
 	github.com/elliotchance/orderedmap v1.8.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect

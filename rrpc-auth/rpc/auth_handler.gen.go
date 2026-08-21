@@ -257,7 +257,7 @@ func (h *AuthServiceClientHandler) Login(ctx context.Context, data *LoginRequest
 
 	methodType := "POST"
 	methodPath := "login"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -285,7 +285,7 @@ func (h *AuthServiceClientHandler) Logout(ctx context.Context) error {
 
 	methodType := "POST"
 	methodPath := "logout"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	_, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -299,7 +299,7 @@ func (h *AuthServiceClientHandler) Refresh(ctx context.Context) (*RefreshRespons
 
 	methodType := "POST"
 	methodPath := "refresh"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -323,7 +323,7 @@ func (h *AuthServiceClientHandler) Me(ctx context.Context) (*MeResponse, error) 
 
 	methodType := "GET"
 	methodPath := "me"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -347,7 +347,7 @@ func (h *AuthServiceClientHandler) RequestPasswordReset(ctx context.Context, dat
 
 	methodType := "POST"
 	methodPath := "requestPasswordReset"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -365,7 +365,7 @@ func (h *AuthServiceClientHandler) ConfirmPasswordReset(ctx context.Context, dat
 
 	methodType := "POST"
 	methodPath := "confirmPasswordReset"
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {

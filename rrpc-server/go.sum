@@ -1,9 +1,9 @@
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/elliotchance/orderedmap v1.6.0 h1:xjn+kbbKXeDq6v9RVE+WYwRbYfAZKvlWfcJNxM8pvEw=
 github.com/elliotchance/orderedmap v1.6.0/go.mod h1:wsDwEaX5jEoyhbs7x93zk2H/qv0zwuhg4inXhDkYqys=
-github.com/netgarden/rrpc v0.0.0-20260410205907-234c96e624c8 h1:cpTltz/f6m0TIZ4Qrn6J6XFLsLwMGKHYNII/BuJbdGI=
-github.com/netgarden/rrpc v0.0.0-20260410205907-234c96e624c8/go.mod h1:iLFKCaR/2RsYa2a5oMkkKnzUxcxZqUhF0Nco18+Jsks=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=

@@ -161,7 +161,7 @@ type ProvidersServiceClientHandler struct {
 func (h *ProvidersServiceClientHandler) List(ctx context.Context, data *DatatableRequest) (*ListProvidersResponse, error) {
 
 	methodType := "GET"
-	url := h.client.url + "/" + h.path
+	url := joinURLPath(h.client.url, h.path)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -189,7 +189,7 @@ func (h *ProvidersServiceClientHandler) SetEnabled(ctx context.Context, id strin
 
 	methodType := "POST"
 	methodPath := fmt.Sprintf("%s/enabled", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	jsonBody, err := json.Marshal(data)
 	if err != nil {
@@ -207,7 +207,7 @@ func (h *ProvidersServiceClientHandler) Delete(ctx context.Context, id string) e
 
 	methodType := "DELETE"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := h.client.url + "/" + h.path + "/" + methodPath
+	url := joinURLPath(h.client.url, h.path, methodPath)
 
 	_, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
@@ -368,7 +368,7 @@ type PublicProvidersServiceClientHandler struct {
 func (h *PublicProvidersServiceClientHandler) List(ctx context.Context) (*ListPublicProvidersResponse, error) {
 
 	methodType := "GET"
-	url := h.client.url + "/" + h.path
+	url := joinURLPath(h.client.url, h.path)
 
 	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
