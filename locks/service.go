@@ -127,6 +127,48 @@ func (s *Service) tryLock(namespace LockNamespace, id string, timeout time.Durat
 	return lock, valid, nil
 }
 
+// Renew extends lock's lease by timeout from now, but only if it is still
+// the current lease holder for its (Namespace, ID) — same ownership check
+// as Unlock, via the lease's Key token (TryLock itself has no notion of
+// caller identity, so a plain re-TryLock can't be used for this: it always
+// fails while any lease, including the caller's own, is unexpired). Returns
+// (nil, nil), not an error, if the lease has since expired and been taken
+// over by someone else — mirroring TryLock's "not held" signal — callers
+// should treat that as having lost the lease and stop acting as its holder.
+func (s *Service) Renew(lock *Lock, timeout time.Duration) (*Lock, error) {
+
+	var renewed *Lock
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+
+		if err := s.LockDBTransaction(tx, lock.Namespace); err != nil {
+			return err
+		}
+
+		dbLock, err := s.getLock(tx, lock.Namespace, lock.ID)
+		if err != nil {
+			return err
+		}
+		if dbLock == nil || dbLock.Key != lock.Key {
+			return nil
+		}
+
+		dbLock.ExpiresAt = time.Now().Add(timeout)
+		if err := tx.Updates(dbLock).Error; err != nil {
+			return err
+		}
+
+		renewed = dbLock
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return renewed, nil
+}
+
 // Unlock releases lock, but only if it is still the current lease holder
 // for its (Namespace, ID) — an Unlock for a lease that has since expired
 // and been replaced by a new acquisition is a safe no-op.

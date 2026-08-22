@@ -211,6 +211,59 @@ func TestUnlock_StaleKeyIsNoop(t *testing.T) {
 	}
 }
 
+func TestRenew_ExtendsWhenOwned(t *testing.T) {
+	svc := NewService(testDB(t))
+
+	lock, err := svc.TryLock(SystemLockNamespace, "res-renew-a", 100*time.Millisecond)
+	if err != nil || lock == nil {
+		t.Fatalf("setup TryLock failed: lock=%v err=%v", lock, err)
+	}
+	originalExpiry := lock.ExpiresAt
+
+	renewed, err := svc.Renew(lock, time.Minute)
+	if err != nil {
+		t.Fatalf("Renew returned error: %v", err)
+	}
+	if renewed == nil {
+		t.Fatal("expected Renew to succeed for the current owner")
+	}
+	if !renewed.ExpiresAt.After(originalExpiry) {
+		t.Errorf("expected Renew to push ExpiresAt forward, got %v (was %v)", renewed.ExpiresAt, originalExpiry)
+	}
+
+	// A stale TryLock attempt (i.e. someone else) must still fail — Renew
+	// actually extended the real row, not just returned a fresh-looking
+	// value without persisting it.
+	if other, err := svc.TryLock(SystemLockNamespace, "res-renew-a", time.Minute); err != nil {
+		t.Fatalf("TryLock returned error: %v", err)
+	} else if other != nil {
+		t.Fatal("expected the lease to still be held after Renew")
+	}
+}
+
+func TestRenew_NoopWhenLeaseTakenOver(t *testing.T) {
+	svc := NewService(testDB(t))
+
+	staleLock, err := svc.TryLock(SystemLockNamespace, "res-renew-b", 10*time.Millisecond)
+	if err != nil || staleLock == nil {
+		t.Fatalf("setup TryLock failed: lock=%v err=%v", staleLock, err)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	if _, err := svc.TryLock(SystemLockNamespace, "res-renew-b", time.Minute); err != nil {
+		t.Fatalf("takeover TryLock returned error: %v", err)
+	}
+
+	renewed, err := svc.Renew(staleLock, time.Minute)
+	if err != nil {
+		t.Fatalf("Renew returned error: %v", err)
+	}
+	if renewed != nil {
+		t.Fatal("expected Renew with a superseded key to return (nil, nil)")
+	}
+}
+
 func TestNamespaces_AreIndependent(t *testing.T) {
 	svc := NewService(testDB(t))
 

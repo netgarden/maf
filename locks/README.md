@@ -62,6 +62,32 @@ locksModule := manager.GetModule("locks").(*locks.Module)
 service := locksModule.GetService()
 ```
 
+## Leader election
+
+`TryLock`/`Lock` are one-off operations — useful for "only one replica runs
+this batch job", but not for "one replica should continuously act as the
+leader" (a plain re-`TryLock` by the current holder itself fails while its
+own lease is unexpired, since `TryLock` has no notion of caller identity).
+`Elector` builds continuous leadership on top of `Renew` (which does check
+identity, via the lease's `Key`):
+
+```go
+elector := locks.NewElector(service, locks.SystemLockNamespace, "updates-collector", locks.ElectorConfig{
+    RenewInterval: 5 * time.Second,  // how often the leader renews
+    CheckInterval: 10 * time.Second, // how often a standby retries
+    LeaseTimeout:  30 * time.Second, // how long an unrenewed lease stays valid
+})
+go elector.Run(ctx) // blocks until ctx is cancelled; releases the lease on the way out
+
+if elector.IsLeader() {
+    // safe to poll from any goroutine
+}
+```
+
+There are no built-in defaults for `ElectorConfig` — pick a cadence that
+fits the work being protected (a fast-failover background collector wants
+single-digit-second timings; an infrequent batch job can be far slower).
+
 ## Concurrency characteristics
 
 Acquiring or releasing *any* lock in a namespace takes
