@@ -1,7 +1,9 @@
 package database
 
 import (
+	"log"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/netgarden/maf"
@@ -97,6 +99,20 @@ func (m *Module) connect() (*gorm.DB, error) {
 	gormConfig := &gorm.Config{}
 	if m.config.ShowSql {
 		gormConfig.Logger = logger.Default.LogMode(logger.Info)
+	} else {
+		// logger.Default has IgnoreRecordNotFoundError: false, and
+		// gorm.Open falls back to it whenever Logger is left nil - so
+		// callers doing a plain lookup-that-may-miss (First/Take/Last)
+		// get a "record not found" line logged on every miss even with
+		// showSql off. Rebuild the same Warn-level default (real errors
+		// and slow-query warnings still get logged) but with that flag
+		// set, so only the routine ErrRecordNotFound case is silenced.
+		gormConfig.Logger = logger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		})
 	}
 
 	var db *gorm.DB
