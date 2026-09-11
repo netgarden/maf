@@ -2,7 +2,7 @@ module github.com/netgarden/maf/logging
 
 go 1.24.1
 
-require github.com/netgarden/maf v0.0.0-20260417193235-7c38ceefb8c3
+require github.com/netgarden/maf v0.0.0-20260823092929-2a2cd5030624
 
 require (
 	github.com/elliotchance/orderedmap v1.6.0 // indirect

@@ -5,7 +5,7 @@ go 1.26.1
 replace github.com/netgarden/rrpc => ../../rrpc
 
 require (
-	github.com/netgarden/maf v0.0.0-20260417193235-7c38ceefb8c3
+	github.com/netgarden/maf v0.0.0-20260823092929-2a2cd5030624
 	github.com/netgarden/maf/security v0.0.0-20260516150744-e7763ffd1638
 	github.com/netgarden/rrpc v0.0.0-20260410205907-234c96e624c8
 )
