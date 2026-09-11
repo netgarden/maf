@@ -244,12 +244,33 @@ func (s *UsersService) UpdateUser(id string, data *dto.UserUpdateDTO) (*entities
 	return user, nil
 }
 
+// DeleteUser removes a user along with the rows that reference it -
+// sessions (which carry a DB foreign key to auth_users, so deleting the
+// user first would fail with a constraint violation for any user who has
+// ever logged in), password reset tokens, and linked external identities.
 func (s *UsersService) DeleteUser(id string) (bool, error) {
-	result := s.db.Where("id = ?", id).Delete(&entities.User{})
-	if result.Error != nil {
-		return false, result.Error
+	var found bool
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", id).Delete(&entities.Session{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", id).Delete(&entities.PasswordResetToken{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", id).Delete(&entities.UserIdentity{}).Error; err != nil {
+			return err
+		}
+		result := tx.Where("id = ?", id).Delete(&entities.User{})
+		if result.Error != nil {
+			return result.Error
+		}
+		found = result.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return result.RowsAffected > 0, nil
+	return found, nil
 }
 
 func (*UsersService) getUser(db *gorm.DB, field string, value string) (*entities.User, error) {

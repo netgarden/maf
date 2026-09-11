@@ -20,6 +20,7 @@ import (
 	"github.com/netgarden/maf/security/passwords"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	uuid "github.com/satori/go.uuid"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -123,7 +124,7 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to connect to test database: %v", err)
 	}
 
-	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}, &entities.Provider{}, &entities.OIDCProvider{}, &entities.UserIdentity{}, &entities.Session{}); err != nil {
+	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}, &entities.Provider{}, &entities.OIDCProvider{}, &entities.UserIdentity{}, &entities.Session{}, &entities.PasswordResetToken{}); err != nil {
 		t.Fatalf("failed to migrate tables: %v", err)
 	}
 
@@ -137,6 +138,7 @@ func testDB(t *testing.T) *gorm.DB {
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.Provider{})
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.UserIdentity{})
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.Session{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.PasswordResetToken{})
 	}
 	reset()
 	t.Cleanup(reset)
@@ -446,9 +448,92 @@ func TestListUsersPage_RejectsUnknownFilterColumn(t *testing.T) {
 	}
 }
 
-func mustCreateUser(t *testing.T, svc *UsersService, username, email string) {
+func TestDeleteUser_RemovesUserAndReturnsTrue(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	created := mustCreateUser(t, svc, "alice", "alice@example.com")
+
+	found, err := svc.DeleteUser(created.ID.String())
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if !found {
+		t.Error("expected found=true for an existing user")
+	}
+
+	var count int64
+	db.Model(&entities.User{}).Where("id = ?", created.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected user row to be gone, found %d", count)
+	}
+}
+
+func TestDeleteUser_UnknownIDReturnsFalse(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	found, err := svc.DeleteUser(uuid.NewV4().String())
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if found {
+		t.Error("expected found=false for a non-existent user")
+	}
+}
+
+// TestDeleteUser_CascadesSessionsPasswordResetTokensAndIdentities guards
+// against the FK violation this once triggered: auth_sessions carries a DB
+// foreign key to auth_users (via Session.User), so a user who has ever
+// logged in - i.e. has a session row - couldn't be deleted until
+// DeleteUser started removing dependent rows first. Password reset tokens
+// and linked identities have no such FK, but are cleaned up the same way
+// to avoid leaving them orphaned.
+func TestDeleteUser_CascadesSessionsPasswordResetTokensAndIdentities(t *testing.T) {
+	db := testDB(t)
+	svc := newTestUsersService(t, db)
+
+	created := mustCreateUser(t, svc, "alice", "alice@example.com")
+
+	session := &entities.Session{UserID: created.ID, Agent: "test", ClientIP: "127.0.0.1"}
+	if err := db.Create(session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	token := &entities.PasswordResetToken{UserID: created.ID, TokenHash: "deadbeef", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := db.Create(token).Error; err != nil {
+		t.Fatalf("create password reset token: %v", err)
+	}
+	provider := &entities.Provider{Type: "oidc", Slug: "test-idp", Name: "Test IdP", Enabled: true}
+	if err := db.Create(provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	identity := &entities.UserIdentity{UserID: created.ID, ProviderType: "oidc", ProviderID: provider.ID, Subject: "sub-1"}
+	if err := db.Create(identity).Error; err != nil {
+		t.Fatalf("create user identity: %v", err)
+	}
+
+	found, err := svc.DeleteUser(created.ID.String())
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if !found {
+		t.Error("expected found=true for an existing user")
+	}
+
+	var sessionCount, tokenCount, identityCount int64
+	db.Model(&entities.Session{}).Where("user_id = ?", created.ID).Count(&sessionCount)
+	db.Model(&entities.PasswordResetToken{}).Where("user_id = ?", created.ID).Count(&tokenCount)
+	db.Model(&entities.UserIdentity{}).Where("user_id = ?", created.ID).Count(&identityCount)
+	if sessionCount != 0 || tokenCount != 0 || identityCount != 0 {
+		t.Errorf("expected dependent rows to be gone, got sessions=%d tokens=%d identities=%d", sessionCount, tokenCount, identityCount)
+	}
+}
+
+func mustCreateUser(t *testing.T, svc *UsersService, username, email string) *entities.User {
 	t.Helper()
-	if _, err := svc.CreateUser(&dto.UserCreateDTO{Username: username, Password: "s3cr3t", Email: email}); err != nil {
+	created, err := svc.CreateUser(&dto.UserCreateDTO{Username: username, Password: "s3cr3t", Email: email})
+	if err != nil {
 		t.Fatalf("CreateUser(%s): %v", username, err)
 	}
+	return created
 }
