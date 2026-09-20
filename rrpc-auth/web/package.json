@@ -1,0 +1,22 @@
+{
+	"name": "@netgarden/maf-auth-ui",
+	"version": "0.0.1",
+	"description": "Bootstrap/Svelte 5 admin UI for maf/rrpc-auth (users management), reusable across apps.",
+	"type": "module",
+	"svelte": "./src/lib/index.ts",
+	"types": "./src/lib/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/lib/index.ts",
+			"svelte": "./src/lib/index.ts"
+		}
+	},
+	"files": [
+		"src/lib"
+	],
+	"sideEffects": false,
+	"peerDependencies": {
+		"svelte": "^5.0.0",
+		"@netgarden/svelte-datatables": "*"
+	}
+}
