@@ -58,8 +58,11 @@ metrics are on); only the endpoint and the HTTP metrics depend on
 The endpoint is outside user authentication. When a token and an allowlist
 are both set, both must pass. A failed check (or a disabled module) answers
 exactly like an unknown route, so it does not reveal the endpoint exists. The
-allowlist matches the TCP peer address (`RemoteAddr`; `X-Forwarded-For` is
-never trusted), so behind a reverse proxy it only ever sees the proxy.
+allowlist matches the TCP peer address (`RemoteAddr`) unless the application
+passes `metrics.WithClientIP(f)`; behind a reverse proxy pass
+`(*ipfilter.Resolver).ClientIP` from `maf/security/ipfilter`, which reads
+`X-Forwarded-For` only when the peer is a configured trusted proxy. Without it the
+allowlist only ever sees the proxy.
 
 ```yaml
 scrape_configs:

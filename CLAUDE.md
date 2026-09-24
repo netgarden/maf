@@ -50,7 +50,7 @@ Note: `rrpc-server` and `rrpc-auth` also require a manual replace for `github.co
 Most modules have no tests yet. Exceptions:
 - `auth/services`: plain unit tests against small repository interfaces (mocked), no DB needed.
 - `locks`: integration tests against a real Postgres (advisory locks can't be meaningfully mocked) — skipped unless `MAF_LOCKS_TEST_DSN` is set. See `locks/README.md`.
-- `metrics`: plain unit tests (no DB, no network): rolling min/max against a fake clock, and the scrape endpoint end to end through a real `rrpc.Server` (token, IP allowlist, disabled = unknown route). Its `rpc/` is generated: `make generate` in `metrics/`, never hand-edit. `security/ipfilter` (IP/CIDR allowlists, shared with iris webhooks) has its own tests.
+- `metrics`: plain unit tests (no DB, no network): rolling min/max against a fake clock, and the scrape endpoint end to end through a real `rrpc.Server` (token, IP allowlist, disabled = unknown route). Its `rpc/` is generated: `make generate` in `metrics/`, never hand-edit. `security/ipfilter` (IP/CIDR allowlists, shared with iris webhooks, plus `Proxies`/`Resolver`: the client address behind reverse proxies, reading `X-Forwarded-For` only from a configured trusted peer) has its own tests.
 - `jobs`: scheduler logic is tested in-memory against a mock (`manager_test.go`); DB-backed behavior needs `MAF_JOBS_TEST_DSN` (see `jobs/README.md`). Depends on `github.com/netgarden/orderedlist` (sibling repo, not part of this one) and `locks`.
 
 ## Core architecture

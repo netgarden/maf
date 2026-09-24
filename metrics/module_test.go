@@ -13,7 +13,7 @@ import (
 
 // newServer builds the module from config values and serves it through a real
 // rrpc.Server, wired the way maf/rrpc-server does it (modules, then observers).
-func newServer(t *testing.T, values map[string]any) (*Module, http.Handler) {
+func newServer(t *testing.T, values map[string]any, opts ...Option) (*Module, http.Handler) {
 	t.Helper()
 	cfg := map[string]any{
 		"metrics.enabled":    false,
@@ -24,7 +24,7 @@ func newServer(t *testing.T, values map[string]any) (*Module, http.Handler) {
 	for k, v := range values {
 		cfg[k] = v
 	}
-	m := NewModule(WithNamespace("test"))
+	m := NewModule(append([]Option{WithNamespace("test")}, opts...)...)
 	m.SetConfig(maf.NewConfig(cfg))
 	if err := m.Initialize(); err != nil {
 		t.Fatal(err)

@@ -6,7 +6,9 @@
 //
 // The address handed to Allowed is only as trustworthy as where it came from:
 // http.Request.RemoteAddr behind a reverse proxy is the proxy's address, which
-// silently defeats an allowlist. Nothing here trusts X-Forwarded-For.
+// silently defeats an allowlist. Proxies (see proxies.go) says which peers are
+// reverse proxies whose X-Forwarded-For may be believed, and works out the
+// real client address from it; SourceIP is the plain TCP peer.
 package ipfilter
 
 import (

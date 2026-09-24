@@ -21,12 +21,19 @@ type scrapeService struct {
 	// tokenHash is sha256(token); nil means no token is required. Hashing
 	// first makes the comparison constant-time regardless of length.
 	tokenHash *[sha256.Size]byte
+	// clientIP says where a request came from (the TCP peer unless the
+	// application supplied something smarter).
+	clientIP func(*http.Request) string
 }
 
-func newScrapeService(s *Service, token string, allowed []string) *scrapeService {
+func newScrapeService(s *Service, token string, allowed []string, clientIP func(*http.Request) string) *scrapeService {
+	if clientIP == nil {
+		clientIP = ipfilter.SourceIP
+	}
 	svc := &scrapeService{
-		handler: promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}),
-		allowed: allowed,
+		handler:  promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}),
+		allowed:  allowed,
+		clientIP: clientIP,
 	}
 	if token != "" {
 		h := sha256.Sum256([]byte(token))
@@ -50,7 +57,7 @@ func (s *scrapeService) Scrape(ctx *rrpc.Context, _ io.Writer) error {
 }
 
 func (s *scrapeService) authorized(r *http.Request) bool {
-	ipOK := len(s.allowed) == 0 || ipfilter.Allowed(s.allowed, net.ParseIP(ipfilter.SourceIP(r)))
+	ipOK := len(s.allowed) == 0 || ipfilter.Allowed(s.allowed, net.ParseIP(s.clientIP(r)))
 
 	tokenOK := true
 	if s.tokenHash != nil {

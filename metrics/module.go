@@ -20,6 +20,7 @@ package metrics
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/netgarden/maf"
@@ -39,6 +40,13 @@ func WithNamespace(ns string) Option {
 	return func(m *Module) { m.namespace = ns }
 }
 
+// WithClientIP sets how the scrape source is determined, for metrics.allowedIps
+// (default: the TCP peer). Behind a reverse proxy, pass
+// (*ipfilter.Resolver).ClientIP so the real client is checked, not the proxy.
+func WithClientIP(f func(*http.Request) string) Option {
+	return func(m *Module) { m.clientIP = f }
+}
+
 func NewModule(opts ...Option) *Module {
 	m := &Module{}
 	for _, o := range opts {
@@ -51,6 +59,7 @@ type Module struct {
 	manager   *maf.Manager
 	config    *maf.Config
 	namespace string
+	clientIP  func(*http.Request) string
 
 	enabled bool
 	scrape  *scrapeService
@@ -72,8 +81,8 @@ func (m *Module) GetConfigSchema() []maf.ConfigItem {
 		// Bearer token required on scrapes; empty = none required.
 		{Name: "metrics.token", Type: maf.String, DefaultValue: ""},
 		// Comma-separated IPs/CIDR ranges allowed to scrape; empty = any source.
-		// The source is the TCP peer (no X-Forwarded-For), so behind a reverse
-		// proxy this only sees the proxy.
+		// The source is the TCP peer unless the application passed WithClientIP:
+		// without it, behind a reverse proxy this only sees the proxy.
 		{Name: "metrics.allowedIps", Type: maf.StringSlice, DefaultValue: []string{}},
 		// Rolling window of the *_min / *_max gauges.
 		{Name: "metrics.window", Type: maf.Duration, DefaultValue: DefaultWindow},
@@ -99,7 +108,7 @@ func (m *Module) Initialize() error {
 	if err != nil {
 		return fmt.Errorf("metrics.allowedIps: %w", err)
 	}
-	m.scrape = newScrapeService(m.service, cfg.GetString("token"), allowed)
+	m.scrape = newScrapeService(m.service, cfg.GetString("token"), allowed, m.clientIP)
 
 	prefix := ""
 	if m.namespace != "" {
