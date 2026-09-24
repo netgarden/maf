@@ -27,6 +27,7 @@ in what it actually uses.
 | `rrpc-auth` | rrpc auth integration | `github.com/netgarden/maf/rrpc-auth` |
 | `locks` | Postgres advisory-lock-backed distributed lease locks | `github.com/netgarden/maf/locks` |
 | `jobs` | Recurring background jobs, coordinated via `locks` | `github.com/netgarden/maf/jobs` |
+| `metrics` | Prometheus registry, scrape endpoint (via `rrpc-server`), HTTP request metrics | `github.com/netgarden/maf/metrics` |
 | `config` | WIP — not yet integrated (and not present in this checkout; see Known limitations) | `github.com/netgarden/maf/config` |
 
 `jobs` additionally depends on `github.com/netgarden/orderedlist`, a sibling repository (not part of this one).
@@ -44,7 +45,7 @@ them, add local `replace` directives once after cloning:
 ./scripts/replace-add.sh
 ```
 
-`rrpc-server`/`rrpc-auth` also need a manual replace for
+`rrpc-server`/`rrpc-auth`/`metrics` also need a manual replace for
 `github.com/netgarden/rrpc`, and `jobs` needs one for
 `github.com/netgarden/orderedlist` — both are separate repositories the
 script doesn't reach into. Before tagging a release, strip the local

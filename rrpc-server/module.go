@@ -59,6 +59,9 @@ func (m *Module) PreStart() error {
 		if mwProvider, ok := module.(RRPCMiddlewaresProvider); ok {
 			m.server.Use(mwProvider.GetRRPCMiddlewares()...)
 		}
+		if obsProvider, ok := module.(RRPCObserversProvider); ok {
+			m.server.Observe(obsProvider.GetRRPCObservers()...)
+		}
 		if provider, ok := module.(RRPCModulesProvider); ok {
 			for _, rrpcModule := range provider.GetRRPCModules() {
 				err := m.server.RegisterModule(rrpcModule)

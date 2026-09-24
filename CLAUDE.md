@@ -19,6 +19,7 @@ rrpc-server/# rrpc server module                                       (github.c
 rrpc-auth/  # rrpc auth integration                                    (github.com/netgarden/maf/rrpc-auth)
 locks/      # Postgres advisory-lock-backed distributed lease locks    (github.com/netgarden/maf/locks)
 jobs/       # Recurring background jobs, coordinated via locks/        (github.com/netgarden/maf/jobs)
+metrics/    # Prometheus registry, /metrics via rrpc, HTTP metrics     (github.com/netgarden/maf/metrics)
 config/     # WIP — not yet integrated into the framework              (github.com/netgarden/maf/config)
 scripts/    # replace-add.sh / replace-remove.sh — manage replace directives
 ```
@@ -49,6 +50,7 @@ Note: `rrpc-server` and `rrpc-auth` also require a manual replace for `github.co
 Most modules have no tests yet. Exceptions:
 - `auth/services`: plain unit tests against small repository interfaces (mocked), no DB needed.
 - `locks`: integration tests against a real Postgres (advisory locks can't be meaningfully mocked) — skipped unless `MAF_LOCKS_TEST_DSN` is set. See `locks/README.md`.
+- `metrics`: plain unit tests (no DB, no network): rolling min/max against a fake clock, and the scrape endpoint end to end through a real `rrpc.Server` (token, IP allowlist, disabled = unknown route). Its `rpc/` is generated: `make generate` in `metrics/`, never hand-edit. `security/ipfilter` (IP/CIDR allowlists, shared with iris webhooks) has its own tests.
 - `jobs`: scheduler logic is tested in-memory against a mock (`manager_test.go`); DB-backed behavior needs `MAF_JOBS_TEST_DSN` (see `jobs/README.md`). Depends on `github.com/netgarden/orderedlist` (sibling repo, not part of this one) and `locks`.
 
 ## Core architecture

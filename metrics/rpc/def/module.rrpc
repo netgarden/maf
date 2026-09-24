@@ -1,0 +1,21 @@
+name = "metrics"
+version = "0.0.1"
+
+option go_package = "rpc"
+
+# The Prometheus scrape endpoint. It is deliberately outside any /api prefix
+# and does no user authentication: access is a bearer token and/or a source-IP
+# allowlist (metrics.token, metrics.allowedIps), checked by the implementation,
+# which answers a failed check exactly like an unknown route.
+#
+# The `bytes` output makes the generated method receive an io.Writer; the
+# implementation instead lets promhttp write straight to the response (it
+# negotiates gzip and sets the exposition Content-Type itself), so the
+# declared content type below only documents what a scrape returns.
+@Path("metrics")
+service Metrics {
+    @method("GET")
+    @Path("")
+    @ResponseContentType("text/plain; version=0.0.4; charset=utf-8")
+    scrape() bytes
+}

@@ -63,7 +63,12 @@ drop github.com/netgarden/maf
 drop github.com/netgarden/maf/database
 drop github.com/netgarden/maf/locks
 
+dir=metrics
+echo "$dir"
+drop github.com/netgarden/maf
+drop github.com/netgarden/maf/security
+
 echo ""
 echo "Done. Local replace directives removed."
-echo "Note: rrpc-server and rrpc-auth may still have a replace for github.com/netgarden/rrpc — remove manually if present."
+echo "Note: rrpc-server, rrpc-auth and metrics may still have a replace for github.com/netgarden/rrpc — remove manually if present."
 echo "Note: jobs may still have a replace for github.com/netgarden/orderedlist — remove manually if present."
