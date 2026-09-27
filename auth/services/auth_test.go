@@ -20,6 +20,7 @@ var (
 	_ sessionsRepository            = (*mockSessions)(nil)
 	_ passwordResetTokensRepository = (*mockPasswordResetTokens)(nil)
 	_ identitiesRepository          = (*mockIdentities)(nil)
+	_ apiKeysRepository             = (*mockApiKeys)(nil)
 )
 
 // --- mocks ---
@@ -249,6 +250,28 @@ func (m *mockIdentities) Create(userID uuid.UUID, providerType string, providerI
 	return identity, nil
 }
 
+// mockApiKeys is a minimal fake of apiKeysRepository for tests of
+// AuthService methods other than ValidateApiKey itself (which gets its own
+// dedicated tests, and its own richer fake, further below).
+type mockApiKeys struct {
+	byHash  map[string]*entities.ApiKey
+	findErr error
+
+	touched []uuid.UUID // ids TouchLastUsed was called with
+}
+
+func (m *mockApiKeys) FindByHash(hash string) (*entities.ApiKey, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	return m.byHash[hash], nil
+}
+
+func (m *mockApiKeys) TouchLastUsed(id uuid.UUID) error {
+	m.touched = append(m.touched, id)
+	return nil
+}
+
 // --- test helpers ---
 
 func newPM() *passwords.Manager { return passwords.NewManager() }
@@ -332,7 +355,7 @@ func newUser(username, plainPassword string, active bool, pm *passwords.Manager)
 }
 
 func newAuthSvc(users usersRepository, sessions sessionsRepository) *AuthService {
-	return NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), &mockIdentities{})
+	return NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, &mockApiKeys{})
 }
 
 func loginReq(username, password string) *dto.CredentialsLoginRequest {
@@ -349,7 +372,7 @@ func TestLogin_Success(t *testing.T) {
 		byID:       map[string]*entities.User{user.ID.String(): user},
 	}
 	sessions := &mockSessions{}
-	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "1.2.3.4", "TestAgent", false)
 
@@ -392,7 +415,7 @@ func TestLogin_WrongPassword(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "wrong"), "", "", false)
 
@@ -421,7 +444,7 @@ func TestLogin_InactiveUser(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", false, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "", "", false)
 
@@ -445,7 +468,7 @@ func TestLogin_SessionCreationError(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{createErr: errors.New("db full")}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{createErr: errors.New("db full")}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	_, _, err := svc.Login(loginReq("alice", "secret"), "", "", false)
 	if err == nil {
@@ -511,7 +534,7 @@ func TestValidateAccess_ReturnsUser(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	accessToken, _ := createAccessToken(svc.accessSecret(), user.ID.String(), time.Minute)
 
@@ -609,7 +632,7 @@ func TestChangePassword_Success(t *testing.T) {
 	users := &mockUsers{
 		byID: map[string]*entities.User{user.ID.String(): user},
 	}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	ok, err := svc.ChangePassword(user.ID.String(), "oldpass", "newpass")
 
@@ -633,7 +656,7 @@ func TestChangePassword_WrongCurrentPassword(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "oldpass", true, pm)
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	ok, err := svc.ChangePassword(user.ID.String(), "wrongpass", "newpass")
 
@@ -676,7 +699,7 @@ func TestRequestPasswordReset_NoMailerWired_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 	// Deliberately no svc.SetMailer(...) call.
 
 	if err := svc.RequestPasswordReset("alice"); err != nil {
@@ -692,7 +715,7 @@ func TestRequestPasswordReset_Disabled_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -717,7 +740,7 @@ func TestConfirmPasswordReset_Disabled_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfgPasswordResetDisabled(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -734,7 +757,7 @@ func TestConfirmPasswordReset_Disabled_Fails(t *testing.T) {
 func TestRequestPasswordReset_UnknownUsername_IsNoop(t *testing.T) {
 	users := &mockUsers{byUsername: map[string]*entities.User{}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, newPM(), &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, newPM(), &mockIdentities{}, &mockApiKeys{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -754,7 +777,7 @@ func TestRequestPasswordReset_InactiveUser_IsNoop(t *testing.T) {
 	user := newUser("alice", "secret", false, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "")
 
@@ -771,7 +794,7 @@ func TestRequestPasswordReset_HappyPath_SendsTemplateAndCreatesToken(t *testing.
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 	mailer := &fakeCredentialsMailer{}
 	svc.SetMailer(mailer, "https://example.com/reset-password/")
 
@@ -809,7 +832,7 @@ func TestRequestPasswordReset_DeletesPreviousUnusedTokens(t *testing.T) {
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
 	tokens := &mockPasswordResetTokens{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 	svc.SetMailer(&fakeCredentialsMailer{}, "")
 
 	if err := svc.RequestPasswordReset("alice"); err != nil {
@@ -842,7 +865,7 @@ func TestConfirmPasswordReset_ValidToken_UpdatesPasswordAndClearsSessions(t *tes
 			"session-1": {UserID: user.ID},
 		},
 	}
-	svc := NewAuthService(newCfg(), testSecret, users, sessions, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -881,7 +904,7 @@ func TestConfirmPasswordReset_ExpiredToken_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 
 	ok, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil {
@@ -905,7 +928,7 @@ func TestConfirmPasswordReset_AlreadyUsedToken_Fails(t *testing.T) {
 		},
 	}
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{})
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, tokens, pm, &mockIdentities{}, &mockApiKeys{})
 
 	firstOK, err := svc.ConfirmPasswordReset(rawToken, "newpass")
 	if err != nil || !firstOK {
@@ -927,7 +950,7 @@ func TestLogin_PasswordLoginDisabled_Fails(t *testing.T) {
 	pm := newPM()
 	user := newUser("alice", "secret", true, pm)
 	users := &mockUsers{byUsername: map[string]*entities.User{"alice": user}}
-	svc := NewAuthService(newCfgPasswordLoginDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{})
+	svc := NewAuthService(newCfgPasswordLoginDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, &mockIdentities{}, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.Login(loginReq("alice", "secret"), "", "", false)
 
@@ -957,7 +980,7 @@ func TestCompleteExternalLogin_NewIdentity_JITCreatesUser(t *testing.T) {
 	users := &mockUsers{}
 	identities := &mockIdentities{}
 	sessions := &mockSessions{}
-	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), identities)
+	svc := NewAuthService(newCfg(), testSecret, users, sessions, &mockPasswordResetTokens{}, newPM(), identities, &mockApiKeys{})
 
 	identity := externalIdentity()
 	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "1.2.3.4", "TestAgent", false)
@@ -988,7 +1011,7 @@ func TestCompleteExternalLogin_ExistingIdentity_LogsInLinkedUser(t *testing.T) {
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
 	identities := &mockIdentities{}
 	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "", "", false)
 
@@ -1010,7 +1033,7 @@ func TestCompleteExternalLogin_ExistingIdentity_InactiveUser_FailsClosed(t *test
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
 	identities := &mockIdentities{}
 	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	accessToken, cookie, err := svc.CompleteExternalLogin(identity, "", "", false)
 
@@ -1032,7 +1055,7 @@ func TestCompleteExternalLogin_VerifiedEmailMatch_AutoLinksExistingUser(t *testi
 		byEmail: map[string]*entities.User{existing.Email: existing},
 	}
 	identities := &mockIdentities{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
 	if err != nil {
@@ -1059,7 +1082,7 @@ func TestCompleteExternalLogin_UnverifiedEmailMatch_DoesNotAutoLink(t *testing.T
 		byEmail: map[string]*entities.User{existing.Email: existing},
 	}
 	identities := &mockIdentities{}
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
 	if err != nil {
@@ -1081,7 +1104,7 @@ func TestCompleteExternalLogin_AutoLinkDisabled_DoesNotAutoLinkEvenWhenVerified(
 		byEmail: map[string]*entities.User{existing.Email: existing},
 	}
 	identities := &mockIdentities{}
-	svc := NewAuthService(newCfgAutoLinkDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfgAutoLinkDisabled(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
 	if err != nil {
@@ -1101,7 +1124,7 @@ func TestCompleteExternalLogin_AdminClaimMapping_SyncsOnEveryLogin(t *testing.T)
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
 	identities := &mockIdentities{}
 	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	wantAdmin := true
 	identity.Admin = &wantAdmin
@@ -1122,7 +1145,7 @@ func TestCompleteExternalLogin_NoAdminClaimMapping_LeavesAdminUntouched(t *testi
 	users := &mockUsers{byID: map[string]*entities.User{user.ID.String(): user}}
 	identities := &mockIdentities{}
 	_, _ = identities.Create(user.ID, identity.ProviderType, identity.ProviderID, identity.Subject, identity.Email)
-	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities)
+	svc := NewAuthService(newCfg(), testSecret, users, &mockSessions{}, &mockPasswordResetTokens{}, pm, identities, &mockApiKeys{})
 
 	_, _, err := svc.CompleteExternalLogin(identity, "", "", false)
 	if err != nil {
@@ -1131,4 +1154,117 @@ func TestCompleteExternalLogin_NoAdminClaimMapping_LeavesAdminUntouched(t *testi
 	if _, called := users.adminSetTo[user.ID.String()]; called {
 		t.Error("SetAdmin must not be called when the identity carries no admin-claim mapping result")
 	}
+}
+
+// --- ValidateApiKey ---
+
+func activeApiKeyUser() *entities.User {
+	return &entities.User{EntityBase: database.EntityBase{ID: uuid.NewV4()}, Username: "alice", Active: true}
+}
+
+func TestValidateApiKey_Success(t *testing.T) {
+	user := activeApiKeyUser()
+	const raw = "pat_test-token"
+	apiKeys := &mockApiKeys{byHash: map[string]*entities.ApiKey{
+		hashApiKey(raw): {EntityBase: database.EntityBase{ID: uuid.NewV4()}, UserID: user.ID, User: user},
+	}}
+	svc := NewAuthService(newCfg(), testSecret, &mockUsers{}, &mockSessions{}, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, apiKeys)
+
+	userID, err := svc.ValidateApiKey(raw, "1.2.3.4")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if userID != user.ID.String() {
+		t.Errorf("userID = %q, want %q", userID, user.ID.String())
+	}
+	if len(apiKeys.touched) != 1 {
+		t.Errorf("expected TouchLastUsed to be called once, got %d", len(apiKeys.touched))
+	}
+}
+
+// TestValidateApiKey_UnknownOrRevokedKey_Fails covers both an unknown token
+// and a revoked one identically: Revoke deletes the row, so a revoked key
+// looks exactly like a never-issued one to FindByHash.
+func TestValidateApiKey_UnknownOrRevokedKey_Fails(t *testing.T) {
+	apiKeys := &mockApiKeys{}
+	svc := NewAuthService(newCfg(), testSecret, &mockUsers{}, &mockSessions{}, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, apiKeys)
+
+	_, err := svc.ValidateApiKey("pat_no-such-token", "1.2.3.4")
+
+	if err == nil {
+		t.Fatal("expected an error for an unknown/revoked key")
+	}
+	if len(apiKeys.touched) != 0 {
+		t.Error("TouchLastUsed must not be called on a failed validation")
+	}
+}
+
+func TestValidateApiKey_ExpiredKey_Fails(t *testing.T) {
+	user := activeApiKeyUser()
+	const raw = "pat_expired"
+	expired := time.Now().Add(-time.Minute)
+	apiKeys := &mockApiKeys{byHash: map[string]*entities.ApiKey{
+		hashApiKey(raw): {EntityBase: database.EntityBase{ID: uuid.NewV4()}, UserID: user.ID, User: user, ExpiresAt: &expired},
+	}}
+	svc := NewAuthService(newCfg(), testSecret, &mockUsers{}, &mockSessions{}, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, apiKeys)
+
+	_, err := svc.ValidateApiKey(raw, "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected an error for an expired key")
+	}
+}
+
+func TestValidateApiKey_DeactivatedUser_Fails(t *testing.T) {
+	user := activeApiKeyUser()
+	user.Active = false
+	const raw = "pat_deactivated-owner"
+	apiKeys := &mockApiKeys{byHash: map[string]*entities.ApiKey{
+		hashApiKey(raw): {EntityBase: database.EntityBase{ID: uuid.NewV4()}, UserID: user.ID, User: user},
+	}}
+	svc := NewAuthService(newCfg(), testSecret, &mockUsers{}, &mockSessions{}, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, apiKeys)
+
+	_, err := svc.ValidateApiKey(raw, "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected an error for a key whose owning user has been deactivated")
+	}
+}
+
+func TestValidateApiKey_AllowedIPs(t *testing.T) {
+	user := activeApiKeyUser()
+	const raw = "pat_ip-restricted"
+	newSvc := func(allowed []string) (*AuthService, *mockApiKeys) {
+		apiKeys := &mockApiKeys{byHash: map[string]*entities.ApiKey{
+			hashApiKey(raw): {EntityBase: database.EntityBase{ID: uuid.NewV4()}, UserID: user.ID, User: user, AllowedIPs: allowed},
+		}}
+		return NewAuthService(newCfg(), testSecret, &mockUsers{}, &mockSessions{}, &mockPasswordResetTokens{}, newPM(), &mockIdentities{}, apiKeys), apiKeys
+	}
+
+	t.Run("empty allowlist accepts any source", func(t *testing.T) {
+		svc, _ := newSvc(nil)
+		if _, err := svc.ValidateApiKey(raw, "203.0.113.9"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("bare IP match", func(t *testing.T) {
+		svc, _ := newSvc([]string{"203.0.113.9/32"})
+		if _, err := svc.ValidateApiKey(raw, "203.0.113.9"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("CIDR range match", func(t *testing.T) {
+		svc, _ := newSvc([]string{"10.0.0.0/8"})
+		if _, err := svc.ValidateApiKey(raw, "10.1.2.3"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("outside the allowlist is rejected", func(t *testing.T) {
+		svc, apiKeys := newSvc([]string{"10.0.0.0/8"})
+		if _, err := svc.ValidateApiKey(raw, "203.0.113.9"); err == nil {
+			t.Error("expected an error for a source IP outside AllowedIPs")
+		}
+		if len(apiKeys.touched) != 0 {
+			t.Error("TouchLastUsed must not be called on a failed validation")
+		}
+	})
 }

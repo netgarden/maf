@@ -13,16 +13,16 @@ import (
 	"github.com/netgarden/rrpc"
 )
 
-func newUsersServiceHandler(service UsersService) *UsersServiceHandler {
+func newApiKeysServiceHandler(service ApiKeysService) *ApiKeysServiceHandler {
 
-	serviceHandler := &UsersServiceHandler{}
-	serviceHandler.name = "Users"
-	serviceHandler.path = rrpc.ParsePath("api/admin/users")
+	serviceHandler := &ApiKeysServiceHandler{}
+	serviceHandler.name = "ApiKeys"
+	serviceHandler.path = rrpc.ParsePath("api/profile/api-keys")
 	serviceHandler.methods = []rrpc.MethodHolder{
 		{
 			Path:        rrpc.ParsePath(""),
 			Type:        "GET",
-			ContentType: "application/json",
+			ContentType: "",
 			HandlerFunc: serviceHandler.handleList,
 		},
 		{
@@ -30,12 +30,6 @@ func newUsersServiceHandler(service UsersService) *UsersServiceHandler {
 			Type:        "POST",
 			ContentType: "application/json",
 			HandlerFunc: serviceHandler.handleCreate,
-		},
-		{
-			Path:        rrpc.ParsePath("{id:string}"),
-			Type:        "POST",
-			ContentType: "application/json",
-			HandlerFunc: serviceHandler.handleUpdate,
 		},
 		{
 			Path:        rrpc.ParsePath("{id:string}"),
@@ -49,34 +43,30 @@ func newUsersServiceHandler(service UsersService) *UsersServiceHandler {
 	return serviceHandler
 }
 
-type UsersServiceHandler struct {
+type ApiKeysServiceHandler struct {
 	name    string
 	path    *rrpc.Path
 	methods []rrpc.MethodHolder
 
-	service UsersService
+	service ApiKeysService
 }
 
-func (h *UsersServiceHandler) Name() string {
+func (h *ApiKeysServiceHandler) Name() string {
 	return h.name
 }
 
-func (h *UsersServiceHandler) Path() *rrpc.Path {
+func (h *ApiKeysServiceHandler) Path() *rrpc.Path {
 	return h.path
 }
 
-func (h *UsersServiceHandler) Methods() []rrpc.MethodHolder {
+func (h *ApiKeysServiceHandler) Methods() []rrpc.MethodHolder {
 	return h.methods
 }
 
-func (h *UsersServiceHandler) handleList(ctx *rrpc.Context) error {
+func (h *ApiKeysServiceHandler) handleList(ctx *rrpc.Context) error {
 
-	reqPayload := &DatatableRequest{}
-	if err := rrpc.DecodeQueryParams(ctx.Request().URL.Query(), reqPayload); err != nil {
-		return rrpc.ErrRrpcBadRequest.WithCausef("failed to decode query params: %w", err)
-	}
 	// Call service method implementation.
-	ret0, err1 := h.service.List(ctx, reqPayload)
+	ret0, err1 := h.service.List(ctx)
 	if err1 != nil {
 		rpcErr, ok := err1.(rrpc.RRPCError)
 		if !ok {
@@ -98,9 +88,9 @@ func (h *UsersServiceHandler) handleList(ctx *rrpc.Context) error {
 	return nil
 }
 
-func (h *UsersServiceHandler) handleCreate(ctx *rrpc.Context) error {
+func (h *ApiKeysServiceHandler) handleCreate(ctx *rrpc.Context) error {
 
-	reqPayload := &CreateUserRequest{}
+	reqPayload := &CreateApiKeyRequest{}
 	reqBody, err := h.readBody(ctx.Request())
 	if err != nil {
 		return err
@@ -131,32 +121,7 @@ func (h *UsersServiceHandler) handleCreate(ctx *rrpc.Context) error {
 	return nil
 }
 
-func (h *UsersServiceHandler) handleUpdate(ctx *rrpc.Context) error {
-
-	reqPayload := &UpdateUserRequest{}
-	reqBody, err := h.readBody(ctx.Request())
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(reqBody, reqPayload); err != nil {
-		return rrpc.ErrRrpcBadRequest.WithCausef("failed to unmarshal request data: %w", err)
-	}
-	// Call service method implementation.
-	err1 := h.service.Update(ctx, reqPayload)
-	if err1 != nil {
-		rpcErr, ok := err1.(rrpc.RRPCError)
-		if !ok {
-			rpcErr = rrpc.ErrRrpcEndpoint.WithCause(err1)
-		}
-		return rpcErr
-	}
-
-	// ctx.Response().WriteHeader(http.StatusOK)
-
-	return nil
-}
-
-func (h *UsersServiceHandler) handleDelete(ctx *rrpc.Context) error {
+func (h *ApiKeysServiceHandler) handleDelete(ctx *rrpc.Context) error {
 
 	// Call service method implementation.
 	err1 := h.service.Delete(ctx)
@@ -173,7 +138,7 @@ func (h *UsersServiceHandler) handleDelete(ctx *rrpc.Context) error {
 	return nil
 }
 
-func (h *UsersServiceHandler) readBody(r *http.Request) ([]byte, error) {
+func (h *ApiKeysServiceHandler) readBody(r *http.Request) ([]byte, error) {
 	defer r.Body.Close()
 
 	reqBody, err := io.ReadAll(r.Body)
@@ -183,38 +148,31 @@ func (h *UsersServiceHandler) readBody(r *http.Request) ([]byte, error) {
 
 	return reqBody, nil
 }
-func newUsersServiceClientHandler(client *Client) *UsersServiceClientHandler {
-	return &UsersServiceClientHandler{
+func newApiKeysServiceClientHandler(client *Client) *ApiKeysServiceClientHandler {
+	return &ApiKeysServiceClientHandler{
 		client: client,
-		name:   "Users",
-		path:   "api/admin/users",
+		name:   "ApiKeys",
+		path:   "api/profile/api-keys",
 	}
 }
 
-type UsersServiceClientHandler struct {
+type ApiKeysServiceClientHandler struct {
 	name   string
 	path   string
 	client *Client
 }
 
-func (h *UsersServiceClientHandler) List(ctx context.Context, data *DatatableRequest) (*ListUsersResponse, error) {
+func (h *ApiKeysServiceClientHandler) List(ctx context.Context) (*ListApiKeysResponse, error) {
 
 	methodType := "GET"
 	url := joinURLPath(h.client.url, h.path)
 
-	query, err := rrpc.EncodeQueryParams(data)
-	if err != nil {
-		return nil, rrpc.ErrRrpcBadRequest.WithCausef("failed to encode query params: %w", err)
-	}
-	if len(query) > 0 {
-		url += "?" + query.Encode()
-	}
-	r, err := h.doHttpRequest(ctx, methodType, url, "application/json", nil)
+	r, err := h.doHttpRequest(ctx, methodType, url, "", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	out := &ListUsersResponse{}
+	out := &ListApiKeysResponse{}
 	defer r.Close()
 	respBody, err := h.readAll(r)
 	if err != nil {
@@ -227,7 +185,7 @@ func (h *UsersServiceClientHandler) List(ctx context.Context, data *DatatableReq
 	return out, nil
 }
 
-func (h *UsersServiceClientHandler) Create(ctx context.Context, data *CreateUserRequest) (*UserItem, error) {
+func (h *ApiKeysServiceClientHandler) Create(ctx context.Context, data *CreateApiKeyRequest) (*CreateApiKeyResponse, error) {
 
 	methodType := "POST"
 	url := joinURLPath(h.client.url, h.path)
@@ -241,7 +199,7 @@ func (h *UsersServiceClientHandler) Create(ctx context.Context, data *CreateUser
 		return nil, err
 	}
 
-	out := &UserItem{}
+	out := &CreateApiKeyResponse{}
 	defer r.Close()
 	respBody, err := h.readAll(r)
 	if err != nil {
@@ -254,25 +212,7 @@ func (h *UsersServiceClientHandler) Create(ctx context.Context, data *CreateUser
 	return out, nil
 }
 
-func (h *UsersServiceClientHandler) Update(ctx context.Context, id string, data *UpdateUserRequest) error {
-
-	methodType := "POST"
-	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
-	url := joinURLPath(h.client.url, h.path, methodPath)
-
-	jsonBody, err := json.Marshal(data)
-	if err != nil {
-		return rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
-	}
-	_, err = h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (h *UsersServiceClientHandler) Delete(ctx context.Context, id string) error {
+func (h *ApiKeysServiceClientHandler) Delete(ctx context.Context, id string) error {
 
 	methodType := "DELETE"
 	methodPath := fmt.Sprintf("%s", url.PathEscape(id))
@@ -286,7 +226,7 @@ func (h *UsersServiceClientHandler) Delete(ctx context.Context, id string) error
 	return nil
 }
 
-func (h *UsersServiceClientHandler) doHttpRequest(ctx context.Context, method string, url string, contentType string, body io.Reader) (*SizedReadCloser, error) {
+func (h *ApiKeysServiceClientHandler) doHttpRequest(ctx context.Context, method string, url string, contentType string, body io.Reader) (*SizedReadCloser, error) {
 
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -340,7 +280,7 @@ func (h *UsersServiceClientHandler) doHttpRequest(ctx context.Context, method st
 	return ret, nil
 }
 
-func (h *UsersServiceClientHandler) readAll(r io.Reader) ([]byte, error) {
+func (h *ApiKeysServiceClientHandler) readAll(r io.Reader) ([]byte, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return nil, rrpc.ErrRrpcBadResponse.WithCausef("failed to read server response body: %w", err)

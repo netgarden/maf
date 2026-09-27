@@ -124,7 +124,7 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to connect to test database: %v", err)
 	}
 
-	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}, &entities.Provider{}, &entities.OIDCProvider{}, &entities.UserIdentity{}, &entities.Session{}, &entities.PasswordResetToken{}); err != nil {
+	if err := db.AutoMigrate(&entities.User{}, &locks.Lock{}, &entities.Provider{}, &entities.OIDCProvider{}, &entities.UserIdentity{}, &entities.Session{}, &entities.PasswordResetToken{}, &entities.ApiKey{}); err != nil {
 		t.Fatalf("failed to migrate tables: %v", err)
 	}
 
@@ -139,6 +139,7 @@ func testDB(t *testing.T) *gorm.DB {
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.UserIdentity{})
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.Session{})
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.PasswordResetToken{})
+		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&entities.ApiKey{})
 	}
 	reset()
 	t.Cleanup(reset)

@@ -1,6 +1,7 @@
 export { default as UsersAdmin } from './UsersAdmin.svelte';
 export { default as ProvidersAdmin } from './ProvidersAdmin.svelte';
 export { default as ProfilePage } from './ProfilePage.svelte';
+export { default as ApiKeysPanel } from './ApiKeysPanel.svelte';
 export { default as Login } from './Login.svelte';
 export { default as ForgotPassword } from './ForgotPassword.svelte';
 export { default as ResetPassword } from './ResetPassword.svelte';

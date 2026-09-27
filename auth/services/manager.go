@@ -38,6 +38,7 @@ type Manager struct {
 	sessionsService      *SessionsService
 	resetTokensService   *PasswordResetTokensService
 	identitiesService    *UserIdentitiesService
+	apiKeysService       *ApiKeysService
 	authService          *AuthService
 	providersService     *ProvidersService
 	oidcProvidersService *OIDCProvidersService
@@ -50,6 +51,7 @@ func (m *Manager) Init() error {
 	m.sessionsService = NewSessionsService(m.db)
 	m.resetTokensService = NewPasswordResetTokensService(m.db)
 	m.identitiesService = NewUserIdentitiesService(m.db)
+	m.apiKeysService = NewApiKeysService(m.db)
 	m.authService = NewAuthService(
 		m.config,
 		m.secret,
@@ -58,6 +60,7 @@ func (m *Manager) Init() error {
 		m.resetTokensService,
 		m.passwordsManager,
 		m.identitiesService,
+		m.apiKeysService,
 	)
 	m.providersService = NewProvidersService(m.db)
 	m.oidcProvidersService = NewOIDCProvidersService(m.db, m.encryptionManager)
@@ -80,6 +83,10 @@ func (m *Manager) GetSessionsService() *SessionsService {
 
 func (m *Manager) GetPasswordResetTokensService() *PasswordResetTokensService {
 	return m.resetTokensService
+}
+
+func (m *Manager) GetApiKeysService() *ApiKeysService {
+	return m.apiKeysService
 }
 
 func (m *Manager) GetUserIdentitiesService() *UserIdentitiesService {

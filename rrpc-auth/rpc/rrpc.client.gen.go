@@ -19,6 +19,7 @@ func NewClient(url string) *Client {
 		client: &http.Client{},
 	}
 
+	c.ApiKeys = newApiKeysServiceClientHandler(c)
 	c.Auth = newAuthServiceClientHandler(c)
 	c.OIDCAuth = newOIDCAuthServiceClientHandler(c)
 	c.OIDCProviders = newOIDCProvidersServiceClientHandler(c)
@@ -34,6 +35,7 @@ type Client struct {
 	url    string
 	client *http.Client
 
+	ApiKeys         *ApiKeysServiceClientHandler
 	Auth            *AuthServiceClientHandler
 	OIDCAuth        *OIDCAuthServiceClientHandler
 	OIDCProviders   *OIDCProvidersServiceClientHandler

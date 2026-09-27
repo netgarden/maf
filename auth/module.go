@@ -106,6 +106,7 @@ func (m *Module) GetDBEntities() []interface{} {
 		&entities.User{},
 		&entities.Session{},
 		&entities.PasswordResetToken{},
+		&entities.ApiKey{},
 		&entities.UserIdentity{},
 		// Provider before OIDCProvider: OIDCProvider.Provider has an
 		// ON DELETE CASCADE foreign key into auth_providers, so that table

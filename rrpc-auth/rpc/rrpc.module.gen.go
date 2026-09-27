@@ -22,6 +22,10 @@ func (s *Module) Services() map[string]rrpc.ServiceHandler {
 	return s.services
 }
 
+func (s *Module) SetApiKeysService(apiKeysService ApiKeysService) {
+	s.services["ApiKeys"] = newApiKeysServiceHandler(apiKeysService)
+}
+
 func (s *Module) SetAuthService(authService AuthService) {
 	s.services["Auth"] = newAuthServiceHandler(authService)
 }

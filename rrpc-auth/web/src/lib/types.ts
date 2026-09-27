@@ -117,3 +117,29 @@ export interface AuthApi {
 export interface ProfileApi {
 	changePassword(request: { currentPassword: string; newPassword: string }): Promise<void>;
 }
+
+// ---- API keys (api_keys.rrpc) ----
+
+export type ApiKeyItem = {
+	id: string;
+	name: string;
+	prefix: string;
+	createdAt: string;
+	lastUsedAt?: string;
+	expiresAt?: string;
+	allowedIps: string[];
+};
+
+export type CreateApiKeyRequest = {
+	name: string;
+	expiresAt?: string;
+	allowedIps?: string[];
+};
+
+export type CreateApiKeyResponse = ApiKeyItem & { token: string };
+
+export interface ApiKeysApi {
+	list(): Promise<{ keys: ApiKeyItem[] }>;
+	create(request: CreateApiKeyRequest): Promise<CreateApiKeyResponse>;
+	delete(id: string): Promise<void>;
+}

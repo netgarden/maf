@@ -1,7 +1,9 @@
 package services
 
 import (
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +23,7 @@ func NewAuthService(
 	resetTokens passwordResetTokensRepository,
 	passwordsManager *passwords.Manager,
 	identities identitiesRepository,
+	apiKeys apiKeysRepository,
 ) *AuthService {
 	return &AuthService{
 		config:           config,
@@ -30,6 +33,7 @@ func NewAuthService(
 		resetTokens:      resetTokens,
 		passwordsManager: passwordsManager,
 		identities:       identities,
+		apiKeys:          apiKeys,
 	}
 }
 
@@ -41,10 +45,18 @@ type AuthService struct {
 	resetTokens      passwordResetTokensRepository
 	passwordsManager *passwords.Manager
 	identities       identitiesRepository
+	apiKeys          apiKeysRepository
 
 	mailer       TemplateMailer
 	resetBaseURL string
 }
+
+// errInvalidApiKey is returned for every ValidateApiKey rejection reason —
+// unknown hash, expired, deactivated owner, or clientIP outside the key's
+// AllowedIPs — deliberately indistinguishable to the caller, mirroring
+// iris's webhooks package: "a caller must not be able to tell wrong token
+// from right token, wrong IP".
+var errInvalidApiKey = errors.New("invalid api key")
 
 // SetMailer wires optional password-reset email delivery. Called by
 // rrpc-auth's Module.Initialize() only when a "mailer" module is also
@@ -224,6 +236,36 @@ func (s *AuthService) ParseAccessToken(accessToken string) (string, error) {
 		return "", err
 	}
 	return claims.UserID, nil
+}
+
+// ValidateApiKey hashes rawKey, looks it up, and — unlike ParseAccessToken,
+// which is a stateless JWT check with no DB hit — always does a fresh
+// lookup, so a revoked key or a deactivated user (key.User.Active == false)
+// is rejected immediately rather than only once a session would have
+// expired anyway. Also rejects a past ExpiresAt, and — if the key has a
+// non-empty AllowedIPs — a clientIP outside it. Every rejection reason
+// returns the identical errInvalidApiKey. Best-effort touches LastUsedAt
+// only on success (see ApiKeysService.TouchLastUsed).
+func (s *AuthService) ValidateApiKey(rawKey, clientIP string) (string, error) {
+	key, err := s.apiKeys.FindByHash(hashApiKey(rawKey))
+	if err != nil {
+		return "", err
+	}
+	if key == nil || key.User == nil || !key.User.Active {
+		return "", errInvalidApiKey
+	}
+	if key.ExpiresAt != nil && key.ExpiresAt.Before(time.Now()) {
+		return "", errInvalidApiKey
+	}
+	if len(key.AllowedIPs) > 0 && !apiKeyAllowed(key.AllowedIPs, net.ParseIP(clientIP)) {
+		return "", errInvalidApiKey
+	}
+
+	if err := s.apiKeys.TouchLastUsed(key.ID); err != nil {
+		slog.Warn("auth: failed to record api key use", slog.Any("error", err))
+	}
+
+	return key.UserID.String(), nil
 }
 
 // GetUser returns the user record by ID.

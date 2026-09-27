@@ -1,6 +1,7 @@
 package rrpcauth
 
 import (
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,17 +13,50 @@ import (
 )
 
 // NewAuthenticationMiddleware validates the Bearer token when present and stores
-// the user ID in context. It never rejects a request — identity extraction is
-// best-effort so that public routes also benefit from knowing the caller.
-func NewAuthenticationMiddleware(authSvc *services.AuthService) rrpc.Middleware {
+// the user ID (and how it was established, see authctx.SetAuthMethod) in
+// context. It never rejects a request — identity extraction is best-effort
+// so that public routes also benefit from knowing the caller.
+//
+// clientIP resolves a request to the address it really came from (behind
+// whatever reverse proxies the consuming app trusts — see Module.WithClientIP)
+// so an API key's optional AllowedIPs restriction can be checked against the
+// real caller, not a proxy's address. It may be nil (an app that never calls
+// WithClientIP): the fallback below is then the request's own RemoteAddr,
+// exactly what an unconfigured ipfilter.Resolver already resolves to before
+// its own Set(proxies) is ever called — so an unconfigured app is no less
+// safe than today, not a silent bypass.
+func NewAuthenticationMiddleware(authSvc *services.AuthService, clientIP func(*http.Request) string) rrpc.Middleware {
 	return func(ctx *rrpc.Context, next func(*rrpc.Context) error) error {
 		if token := extractBearerToken(ctx.Request()); token != "" {
-			if userID, err := authSvc.ParseAccessToken(token); err == nil {
+			if services.IsApiKeyToken(token) {
+				ip := ""
+				if clientIP != nil {
+					ip = clientIP(ctx.Request())
+				} else {
+					ip = remoteAddrHost(ctx.Request())
+				}
+				if userID, err := authSvc.ValidateApiKey(token, ip); err == nil {
+					authctx.SetUserID(ctx, userID)
+					authctx.SetAuthMethod(ctx, authctx.AuthMethodApiKey)
+				}
+			} else if userID, err := authSvc.ParseAccessToken(token); err == nil {
 				authctx.SetUserID(ctx, userID)
+				authctx.SetAuthMethod(ctx, authctx.AuthMethodSession)
 			}
 		}
 		return next(ctx)
 	}
+}
+
+// remoteAddrHost strips the port from an http.Request's RemoteAddr (always
+// "host:port" for a real TCP connection). Used only when the consuming app
+// hasn't wired a proper trusted-proxy-aware resolver via WithClientIP.
+func remoteAddrHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // extractBearerToken reads the bearer token from the Authorization

@@ -163,11 +163,14 @@ func (h *ProvidersServiceClientHandler) List(ctx context.Context, data *Datatabl
 	methodType := "GET"
 	url := joinURLPath(h.client.url, h.path)
 
-	jsonBody, err := json.Marshal(data)
+	query, err := rrpc.EncodeQueryParams(data)
 	if err != nil {
-		return nil, rrpc.ErrRrpcBadRequest.WithCausef("failed to marshal request: %w", err)
+		return nil, rrpc.ErrRrpcBadRequest.WithCausef("failed to encode query params: %w", err)
 	}
-	r, err := h.doHttpRequest(ctx, methodType, url, "application/json", bytes.NewBuffer(jsonBody))
+	if len(query) > 0 {
+		url += "?" + query.Encode()
+	}
+	r, err := h.doHttpRequest(ctx, methodType, url, "application/json", nil)
 	if err != nil {
 		return nil, err
 	}

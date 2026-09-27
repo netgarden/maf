@@ -1,8 +1,9 @@
 <script lang="ts">
+	import ApiKeysPanel from './ApiKeysPanel.svelte';
 	import { errorName } from './errors';
-	import type { Me, ProfileApi } from './types';
+	import type { ApiKeysApi, Me, ProfileApi } from './types';
 
-	let { api, user }: { api: ProfileApi; user: Me | null } = $props();
+	let { api, user, apiKeys }: { api: ProfileApi; user: Me | null; apiKeys?: ApiKeysApi } = $props();
 
 	let currentPassword = $state('');
 	let newPassword = $state('');
@@ -109,3 +110,7 @@
 		</form>
 	</div>
 </div>
+
+{#if apiKeys}
+	<ApiKeysPanel api={apiKeys} />
+{/if}

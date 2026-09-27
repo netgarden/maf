@@ -20,6 +20,14 @@ type ProfileServiceImpl struct {
 }
 
 func (s *ProfileServiceImpl) ChangePassword(ctx *rrpc.Context, req *rpc.ChangePasswordRequest) error {
+	// ChangePassword only ever changes the caller's own password (there is no
+	// "other user" form of it) — an API-key-authenticated caller is refused
+	// unconditionally, so a leaked or agent-held key can't lock the real
+	// owner out by rotating their password out from under them.
+	if authctx.IsApiKeyAuth(ctx) {
+		return rpc.ErrApiKeyRestricted
+	}
+
 	userID, ok := authctx.GetUserID(ctx)
 	if !ok {
 		return rpc.ErrUnauthorized

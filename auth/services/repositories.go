@@ -41,3 +41,11 @@ type passwordResetTokensRepository interface {
 	Consume(tokenHash string, now time.Time) (uuid.UUID, bool, error)
 	DeleteUnusedForUser(userID uuid.UUID) error
 }
+
+// apiKeysRepository backs AuthService.ValidateApiKey — deliberately narrow
+// (just the lookup and the use-tracking touch), not the full CRUD surface
+// ApiKeysService exposes for the rrpc layer.
+type apiKeysRepository interface {
+	FindByHash(hash string) (*entities.ApiKey, error)
+	TouchLastUsed(id uuid.UUID) error
+}

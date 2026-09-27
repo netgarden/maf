@@ -58,6 +58,24 @@ func TestExtractBearerToken(t *testing.T) {
 	}
 }
 
+func TestRemoteAddrHost(t *testing.T) {
+	cases := []struct {
+		remoteAddr string
+		want       string
+	}{
+		{"203.0.113.9:54321", "203.0.113.9"},
+		{"[2001:db8::1]:443", "2001:db8::1"},
+		{"not-a-host-port", "not-a-host-port"}, // malformed: fall back to the raw value rather than drop it
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = c.remoteAddr
+		if got := remoteAddrHost(req); got != c.want {
+			t.Errorf("remoteAddrHost(%q) = %q, want %q", c.remoteAddr, got, c.want)
+		}
+	}
+}
+
 func TestIsAuthPath(t *testing.T) {
 	cases := []struct {
 		path string

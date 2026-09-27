@@ -1,0 +1,54 @@
+struct ApiKeyItem {
+    id        string
+    name      string
+    prefix    string
+    createdAt string
+    @optional lastUsedAt string
+    @optional expiresAt string
+    allowedIps []string
+}
+
+struct CreateApiKeyRequest {
+    name string
+    @optional expiresAt string
+    # plain IPs or CIDR ranges; empty/omitted = any source, one entry per textarea line in the UI
+    @optional allowedIps []string
+}
+
+struct CreateApiKeyResponse {
+    id         string
+    name       string
+    token      string        # the plaintext key: shown exactly once, at creation
+    prefix     string
+    createdAt  string
+    @optional expiresAt string
+    allowedIps []string
+}
+
+struct ListApiKeysResponse {
+    keys []ApiKeyItem
+}
+
+error ApiKeyNotFound {
+    code = 7
+    http_code = 404
+    message = "API key not found"
+}
+
+error ApiKeyRestricted {
+    code = 8
+    http_code = 403
+    message = "an API key cannot perform this action"
+}
+
+@Path("api/profile/api-keys")
+service ApiKeys {
+    @method("GET")
+    @Path("")
+    list() (ListApiKeysResponse)
+    @Path("")
+    create(request CreateApiKeyRequest) (CreateApiKeyResponse)
+    @method("DELETE")
+    @Path("{id:string}")
+    delete()
+}

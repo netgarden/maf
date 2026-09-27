@@ -72,6 +72,7 @@ func TestOIDCFullFlow_AgainstRealDexProvider(t *testing.T) {
 	sessionsService := NewSessionsService(db)
 	resetTokensService := NewPasswordResetTokensService(db)
 	identitiesService := NewUserIdentitiesService(db)
+	apiKeysService := NewApiKeysService(db)
 
 	cfg := maf.NewConfig(map[string]any{
 		"auth.token.ttl":                    15 * time.Minute,
@@ -88,7 +89,7 @@ func TestOIDCFullFlow_AgainstRealDexProvider(t *testing.T) {
 		"auth.oidc.callbackBaseUrl": "http://127.0.0.1:9",
 	})
 
-	authService := NewAuthService(cfg, testSecret, usersService, sessionsService, resetTokensService, pm, identitiesService)
+	authService := NewAuthService(cfg, testSecret, usersService, sessionsService, resetTokensService, pm, identitiesService, apiKeysService)
 	providersService := NewOIDCProvidersService(db, encryption.NewManager("test-encryption-secret"))
 	oidcAuthService := NewOIDCAuthService(cfg, testSecret, providersService, authService)
 
